@@ -1,179 +1,716 @@
 import os
-import json
-import base64
-import requests
+import asyncio
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional
+
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 from groq import Groq
 
-app = FastAPI()
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://ahs-ai-api.onrender.com/webhook")
+# ============================================================
+# AHS AI AGENT — PHASE 1
+# Foundation + Guardrails + Owner Security
+# ============================================================
 
-MASTER_SECRET_KEY = "AHS_SECRET_2065"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+logger = logging.getLogger("ahs_ai")
 
-class SelfCoder:
-    def __init__(self):
-        self.token = GITHUB_TOKEN
-        self.repo = "Aunghtetsan/AHS-AI-API"
-        self.branch = "main"
+app = FastAPI(title="AHS AI Agent")
 
-    def read_code(self, file_path: str):
-        if not self.token:
-            return "Error: GITHUB_TOKEN မရှိပါ။"
-        url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            file_data = res.json()
-            content_encoded = file_data.get("content", "")
-            return base64.b64decode(content_encoded).decode("utf-8")
-        else:
-            return f"Error: ဖိုင်ကို ဖတ်မရပါ ({res.status_code}) - {res.text}"
 
-    def update_code(self, file_path: str, new_code: str, commit_message: str):
-        if not self.token:
-            return "Error: GITHUB_TOKEN မရှိပါ။"
-        if file_path.strip().lower() == "main.py":
-            return "Error: main.py ကို ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မရှိဘဲ ပြင်ခွင့်မရှိပါ။"
-        url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
-        res = requests.get(url, headers=headers)
-        sha = res.json().get("sha") if res.status_code == 200 else None
-        encoded_content = base64.b64encode(new_code.encode("utf-8")).decode("utf-8")
-        data = {"message": commit_message, "content": encoded_content, "branch": self.branch}
-        if sha:
-            data["sha"] = sha
-        put_res = requests.put(url, headers=headers, json=data)
-        if put_res.status_code in [200, 201]:
-            return f"အောင်မြင်ပါပြီ! '{file_path}' ကို GitHub သို့ တင်လိုက်ပါပြီ။"
-        else:
-            return f"Failed: {put_res.text}"
+# ============================================================
+# ENVIRONMENT / SECRETS
+# ============================================================
 
-coder = SelfCoder()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_code",
-            "description": "Read content of an existing file from GitHub.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "The path of the file to read, e.g. calculator.py"}
-                },
-                "required": ["file_path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_code",
-            "description": "Create or update a new file in GitHub.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "The path of the file to create or update."},
-                    "new_code": {"type": "string", "description": "The complete python code."},
-                    "commit_message": {"type": "string", "description": "Commit message."}
-                },
-                "required": ["file_path", "new_code", "commit_message"]
-            }
-        }
+# OWNER VERIFICATION KEY (Hard-coded as requested)
+OWNER_VERIFICATION_KEY = "AHS_SECRET_2065"
+
+EMERGENCY_OVERRIDE_KEY = os.getenv(
+    "EMERGENCY_OVERRIDE_KEY"
+)
+
+SESSION_MINUTES = int(
+    os.getenv("OWNER_SESSION_MINUTES", "60")
+)
+
+PROTECTED_FILES = {
+    item.strip()
+    for item in os.getenv(
+        "PROTECTED_FILES",
+        "main.py",
+    ).split(",")
+    if item.strip()
+}
+
+
+# ============================================================
+# CONFIGURATION CHECK
+# ============================================================
+
+def get_missing_configuration():
+    required = {
+        "GROQ_API_KEY": GROQ_API_KEY,
+        "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+        "OWNER_VERIFICATION_KEY": OWNER_VERIFICATION_KEY,
     }
-]
 
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build() if TELEGRAM_TOKEN else None
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("မင်္ဂလာပါ! AHS AI Agent အဆင်သင့် ဖြစ်ပါပြီ။")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    if not groq_client:
-        await update.message.reply_text("Groq API Key မရှိပါ။")
-        return
-    
-    messages = [
-        {"role": "system", "content": (
-            f"You are an AI assistant under master's command. Master key is '{MASTER_SECRET_KEY}'. "
-            "If user wants to read or update code, use the appropriate tools. "
-            "Never modify main.py."
-        )},
-        {"role": "user", "content": user_text}
+    return [
+        name
+        for name, value in required.items()
+        if not value
     ]
-    
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            temperature=0.7
+
+
+# ============================================================
+# GROQ
+# ============================================================
+
+groq_client: Optional[Groq] = None
+
+if GROQ_API_KEY:
+    groq_client = Groq(
+        api_key=GROQ_API_KEY
+    )
+
+
+# ============================================================
+# TELEGRAM APPLICATION
+# ============================================================
+
+telegram_app = (
+    Application
+    .builder()
+    .token(TELEGRAM_TOKEN)
+    .updater(None)
+    .build()
+)
+
+
+# ============================================================
+# OWNER SESSION
+# ============================================================
+
+owner_sessions: Dict[int, datetime] = {}
+
+
+def create_owner_session(user_id: int):
+    expires_at = (
+        datetime.now(timezone.utc)
+        + timedelta(minutes=SESSION_MINUTES)
+    )
+
+    owner_sessions[user_id] = expires_at
+
+    return expires_at
+
+
+def is_owner_session_active(user_id: int) -> bool:
+
+    expires_at = owner_sessions.get(user_id)
+
+    if not expires_at:
+        return False
+
+    now = datetime.now(timezone.utc)
+
+    if now >= expires_at:
+        owner_sessions.pop(
+            user_id,
+            None,
         )
-        
-        response_message = response.choices[0].message
-        
-        if response_message.tool_calls:
-            if MASTER_SECRET_KEY not in user_text:
-                await update.message.reply_text("🔒 ဤလုပ်ဆောင်ချက်အတွက် MASTER_SECRET_KEY လိုအပ်ပါသည်။")
-                return
-            
-            for tool_call in response_message.tool_calls:
-                function_name = tool_call.function.name
-                try:
-                    function_args = json.loads(tool_call.function.arguments)
-                except:
-                    function_args = {}
-                
-                if function_name == "read_code":
-                    await update.message.reply_text("⏳ ဖိုင်ကို ဖတ်နေပါပြီ...")
-                    res = coder.read_code(file_path=function_args.get("file_path", "calculator.py"))
-                    await update.message.reply_text(f"📁 **File Content:**\n```python\n{res}\n```")
-                
-                elif function_name == "update_code":
-                    await update.message.reply_text("⏳ ဖိုင်တင်နေပါပြီ...")
-                    res = coder.update_code(
-                        file_path=function_args.get("file_path"),
-                        new_code=function_args.get("new_code"),
-                        commit_message=function_args.get("commit_message", "Update via AI")
-                    )
-                    await update.message.reply_text(res)
-        else:
-            await update.message.reply_text(response_message.content)
-            
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        return False
 
-if telegram_app:
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return True
 
-@app.get("/")
-def home():
-    return {"status": "Running"}
+
+def logout_owner(user_id: int):
+    owner_sessions.pop(
+        user_id,
+        None,
+    )
+
+
+# ============================================================
+# ACTION CLASSIFICATION / GUARDRAILS
+# ============================================================
+
+CRITICAL_KEYWORDS = {
+    "delete",
+    "destroy",
+    "merge",
+    "deploy",
+    "production",
+    "wallet",
+    "payment",
+    "money",
+    "withdraw",
+    "transfer",
+    "trading",
+    "buy",
+    "sell",
+    "secret",
+    "api key",
+    "token",
+    "password",
+    "owner",
+    "permission",
+    "main.py",
+    "security",
+    "guardrails",
+    "recovery",
+}
+
+
+def contains_critical_action(text: str) -> bool:
+
+    normalized = text.lower()
+
+    return any(
+        keyword in normalized
+        for keyword in CRITICAL_KEYWORDS
+    )
+
+
+def is_protected_file(path: str) -> bool:
+
+    if not path:
+        return False
+
+    normalized = (
+        path.strip()
+        .lstrip("/")
+    )
+
+    if normalized in PROTECTED_FILES:
+        return True
+
+    dangerous_paths = (
+        ".env",
+        ".git/",
+        ".git\\",
+        "credentials",
+        "secrets",
+    )
+
+    lower_path = normalized.lower()
+
+    return any(
+        item in lower_path
+        for item in dangerous_paths
+    )
+
+
+# ============================================================
+# SECRET COMPARISON
+# ============================================================
+
+def verify_secret(
+    supplied: str,
+    expected: Optional[str],
+) -> bool:
+
+    if not supplied or not expected:
+        return False
+
+    return secrets.compare_digest(
+        supplied,
+        expected,
+    )
+
+
+# ============================================================
+# TELEGRAM /start
+# ============================================================
+
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    await update.message.reply_text(
+        "မင်္ဂလာပါ။ AHS AI Agent မှ ကြိုဆိုပါတယ်။\n\n"
+        "🟢 ပုံမှန်အလုပ်များ — Owner verification မလိုပါ။\n"
+        "🔐 Protected action များအတွက် — Owner verification လိုပါမယ်။\n\n"
+        "/unlock <Owner Key> — Owner session ဖွင့်ရန်\n"
+        "/status — Session အခြေအနေကြည့်ရန်\n"
+        "/logout — Owner session ပိတ်ရန်"
+    )
+
+
+# ============================================================
+# OWNER UNLOCK
+# ============================================================
+
+async def unlock_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    user_id = update.effective_user.id
+
+    if not context.args:
+
+        await update.message.reply_text(
+            "🔐 Owner verification လုပ်ရန်\n\n"
+            "/unlock <Owner Key>"
+        )
+
+        return
+
+    supplied_key = " ".join(
+        context.args
+    )
+
+    if not verify_secret(
+        supplied_key,
+        OWNER_VERIFICATION_KEY,
+    ):
+
+        logger.warning(
+            "Failed owner verification: user_id=%s",
+            user_id,
+        )
+
+        await update.message.reply_text(
+            "❌ Owner verification မအောင်မြင်ပါ။"
+        )
+
+        return
+
+    expires_at = create_owner_session(
+        user_id
+    )
+
+    logger.info(
+        "Owner session created: user_id=%s",
+        user_id,
+    )
+
+    await update.message.reply_text(
+        "✅ Owner verification အောင်မြင်ပါပြီ။\n\n"
+        f"🕐 Session: {SESSION_MINUTES} မိနစ်\n"
+        "🟢 Routine tasks — ပုံမှန်လုပ်နိုင်ပါတယ်။\n"
+        "🔴 Critical actions — ထပ်မံအတည်ပြုရပါမယ်။\n\n"
+        f"Expires: "
+        f"{expires_at.strftime('%Y-%m-%d %H:%M UTC')}"
+    )
+
+
+# ============================================================
+# /logout
+# ============================================================
+
+async def logout_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    user_id = update.effective_user.id
+
+    logout_owner(user_id)
+
+    await update.message.reply_text(
+        "🔒 Owner session ပိတ်လိုက်ပါပြီ။"
+    )
+
+
+# ============================================================
+# /status
+# ============================================================
+
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    user_id = update.effective_user.id
+
+    if is_owner_session_active(user_id):
+
+        expires_at = owner_sessions[user_id]
+
+        await update.message.reply_text(
+            "🟢 Owner session ACTIVE\n"
+            f"Expires: "
+            f"{expires_at.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "⚪ Owner session မရှိပါ။"
+        )
+
+
+# ============================================================
+# AI SYSTEM PROMPT
+# ============================================================
+
+SYSTEM_PROMPT = """
+You are AHS AI Agent.
+
+You are operating in Phase 1.
+
+MAIN PRINCIPLES:
+
+1. Help users naturally.
+2. Routine tasks should be handled freely.
+3. Do not unnecessarily ask for Owner verification.
+4. Protect Main Code and Security boundaries.
+5. Never expose secrets, API keys, passwords or tokens.
+6. Never pretend that a file was changed if no file tool
+   actually changed it.
+7. Prefer small, reversible changes.
+8. Explain important changes clearly.
+9. Keep the Owner in control of critical actions.
+
+ACCESS LEVELS:
+
+GREEN — Routine:
+- General conversation
+- Questions
+- Code analysis
+- Reading logs
+- Cache management
+- Testing
+- Documentation
+- Safe non-critical development
+
+No Owner verification required.
+
+YELLOW — Controlled:
+- Large refactoring
+- Dependency changes
+- Architecture changes
+- Large project modifications
+
+Explain the plan before execution.
+
+RED — Protected:
+- Main/protected code
+- Security system
+- Owner permissions
+- Recovery system
+- Secrets
+- API keys
+- Deployment
+- Destructive operations
+- Money
+- Wallets
+- Real-money trading
+
+These require Owner verification and explicit approval.
+
+IMPORTANT:
+
+Do not treat every coding request as a protected action.
+
+Only protect actions that actually cross a critical
+security or ownership boundary.
+
+The goal is to provide maximum useful autonomy while
+keeping critical controls under the Owner.
+"""
+
+
+# ============================================================
+# GROQ CALL
+# ============================================================
+
+def ask_groq_sync(
+    user_text: str,
+) -> str:
+
+    if not groq_client:
+        raise RuntimeError(
+            "GROQ_API_KEY is not configured."
+        )
+
+    completion = (
+        groq_client
+        .chat
+        .completions
+        .create(
+            model="llama-3.3-70b-versatile",
+            temperature=0.2,
+            max_tokens=1200,
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": user_text,
+                },
+            ],
+        )
+    )
+
+    return (
+        completion
+        .choices[0]
+        .message
+        .content
+        .strip()
+    )
+
+
+async def ask_groq(
+    user_text: str,
+) -> str:
+
+    return await asyncio.to_thread(
+        ask_groq_sync,
+        user_text,
+    )
+
+
+# ============================================================
+# MESSAGE HANDLER
+# ============================================================
+
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    user_id = update.effective_user.id
+    user_text = update.message.text.strip()
+
+    if not user_text:
+        return
+
+    owner_active = (
+        is_owner_session_active(user_id)
+    )
+
+    critical = contains_critical_action(
+        user_text
+    )
+
+    # --------------------------------------------------------
+    # PROTECTED ACTION
+    # --------------------------------------------------------
+
+    if critical and not owner_active:
+
+        await update.message.reply_text(
+            "🔒 ဒီလုပ်ဆောင်ချက်က Protected Action ဖြစ်နိုင်ပါတယ်။\n\n"
+            "Owner verification မရှိသေးပါ။\n"
+            "ပထမဆုံး Owner session ဖွင့်ပါ။\n\n"
+            "/unlock <Owner Key>"
+        )
+
+        logger.warning(
+            "Blocked protected action: user_id=%s",
+            user_id,
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # NORMAL AI REQUEST
+    # --------------------------------------------------------
+
+    try:
+
+        response_text = await ask_groq(
+            user_text
+        )
+
+        max_message_length = 4000
+
+        for start in range(
+            0,
+            len(response_text),
+            max_message_length,
+        ):
+
+            chunk = response_text[
+                start:start + max_message_length
+            ]
+
+            await update.message.reply_text(
+                chunk
+            )
+
+        logger.info(
+            "Request handled: "
+            "user_id=%s owner=%s critical=%s",
+            user_id,
+            owner_active,
+            critical,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "AI request failed: user_id=%s",
+            user_id,
+        )
+
+        await update.message.reply_text(
+            "⚠️ AI request မအောင်မြင်ပါ။ "
+            "ခဏနေပြီး ထပ်ကြိုးစားပါ။"
+        )
+
+
+# ============================================================
+# STARTUP
+# ============================================================
 
 @app.on_event("startup")
 async def startup_event():
-    if telegram_app:
-        await telegram_app.initialize()
-        await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-        await telegram_app.start()
+
+    missing = get_missing_configuration()
+
+    if missing:
+
+        logger.error(
+            "Missing configuration: %s",
+            ", ".join(missing),
+        )
+
+    await telegram_app.initialize()
+
+    if WEBHOOK_URL:
+
+        webhook_url = (
+            f"{WEBHOOK_URL.rstrip('/')}/webhook"
+        )
+
+        await telegram_app.bot.set_webhook(
+            url=webhook_url
+        )
+
+        logger.info(
+            "Telegram webhook configured."
+        )
+
+    logger.info(
+        "AHS AI Agent Phase 1 started."
+    )
+
+
+# ============================================================
+# TELEGRAM WEBHOOK
+# ============================================================
 
 @app.post("/webhook")
-async def telegram_webhook(request: Request):
-    if not telegram_app:
-        return {"status": "Telegram app not configured"}
+async def telegram_webhook(
+    request: Request,
+):
+
     data = await request.json()
-    update = Update.de_json(data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return {"status": "ok"}
-        
+
+    update = Update.de_json(
+        data,
+        telegram_app.bot,
+    )
+
+    await telegram_app.process_update(
+        update
+    )
+
+    return {
+        "status": "ok"
+    }
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/")
+async def root():
+
+    missing = get_missing_configuration()
+
+    return {
+        "status": "AHS AI Agent is running",
+        "phase": "Phase 1",
+        "telegram": bool(TELEGRAM_TOKEN),
+        "groq": bool(GROQ_API_KEY),
+        "owner_security": bool(
+            OWNER_VERIFICATION_KEY
+        ),
+        "protected_files": list(
+            PROTECTED_FILES
+        ),
+        "configuration_ok": not missing,
+    }
+
+
+# ============================================================
+# TELEGRAM HANDLERS
+# ============================================================
+
+telegram_app.add_handler(
+    CommandHandler(
+        "start",
+        start_command,
+    )
+)
+
+telegram_app.add_handler(
+    CommandHandler(
+        "unlock",
+        unlock_command,
+    )
+)
+
+telegram_app.add_handler(
+    CommandHandler(
+        "logout",
+        logout_command,
+    )
+)
+
+telegram_app.add_handler(
+    CommandHandler(
+        "status",
+        status_command,
+    )
+)
+
+telegram_app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_message,
+    )
+    )
+    
