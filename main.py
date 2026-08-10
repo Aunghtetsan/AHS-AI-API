@@ -1,52 +1,45 @@
 import os
+import json
 import base64
 import requests
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 
-# FastAPI App တည်ဆောက်ခြင်း
 app = FastAPI()
 
-# Environment Variables တွေ ခေါ်ယူခြင်း
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-# Render က သင့်ရဲ့ App URL (ဥပမာ - https://ahs-ai-api.onrender.com)
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://ahs-ai-api.onrender.com/webhook")
 
-# Groq AI Client သတ်မှတ်ခြင်း
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ==========================================
-# 1. AI SELF-CODER SYSTEM (GitHub Integration)
+# 1. AI SELF-CODER SYSTEM & TOOL DEFINITION
 # ==========================================
 class SelfCoder:
     def __init__(self):
         self.token = GITHUB_TOKEN
-        self.repo = "Aunghtetsan/AHS-AI-API"  # မင်းရဲ့ GitHub Repository နာမည်
+        self.repo = "Aunghtetsan/AHS-AI-API"
         self.branch = "main"
 
-    def update_code(self, file_path, new_code, commit_message):
+    def update_code(self, file_path: str, new_code: str, commit_message: str):
+        """GitHub ရှိ သတ်မှတ်ထားသော ဖိုင်ထဲသို့ ကုဒ်အသစ်များ အလိုအလျောက် ရေးသားတင်သွင်းရန် Tool"""
         if not self.token:
             return "Error: GITHUB_TOKEN မရှိပါ။"
         
         url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
         headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
         
-        # 1. Get current file SHA
         res = requests.get(url, headers=headers)
         if res.status_code != 200:
             return f"Error getting file: {res.text}"
         
         sha = res.json().get("sha")
-        
-        # 2. Encode new code to base64
         encoded_content = base64.b64encode(new_code.encode("utf-8")).decode("utf-8")
         
-        # 3. Commit new code to GitHub
         data = {
             "message": commit_message,
             "content": encoded_content,
@@ -62,19 +55,33 @@ class SelfCoder:
 
 coder = SelfCoder()
 
+# Groq သို့ ပေးမည့် Tools စာရင်း
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "update_code",
+            "description": "Updates or writes code to a file in the GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "The path of the file to update, e.g. main.py"},
+                    "new_code": {"type": "string", "description": "The complete new python code to write into the file."},
+                    "commit_message": {"type": "string", "description": "Commit message for the update."}
+                },
+                "required": ["file_path", "new_code", "commit_message"]
+            }
+        }
+    }
+]
+
 # ==========================================
-# 2. FASTAPI WEB ROUTES & TELEGRAM WEBHOOK
-# =================-=========================
-
-@app.get("/")
-def home():
-    return {"status": "AHS AI Agent is running successfully with Self-Coding capability!"}
-
-# Telegram Bot Setup
+# 2. TELEGRAM MESSAGE HANDLER WITH AGENT LOGIC
+# ==========================================
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build() if TELEGRAM_TOKEN else None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("မင်္ဂလာပါ! ငါက မင်းရဲ့ အမိန့်အောက်က အဆင့်မြင့် AI Agent ဖြစ်ပါတယ်။ ဘာကူညီရမလဲ?")
+    await update.message.reply_text("မင်္ဂလာပါ! ငါသည် ကိုယ့်ကိုကိုယ် ကုဒ်ရေးပြီး တိုးတက်စေနိုင်သော အစစ်အမှန် AI Agent ဖြစ်ပါသည်။")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -82,24 +89,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Groq API Key မရှိသေးပါ။")
         return
     
+    messages = [
+        {"role": "system", "content": "You are an autonomous AI software engineer agent. If the user asks you to modify code, create features, or fix bugs in the repository, you MUST call the update_code tool to apply changes directly to GitHub."},
+        {"role": "user", "content": user_text}
+    ]
+    
     try:
-        # Groq Llama 3 မော်ဒယ်ဖြင့် အဖြေထုတ်ခြင်း
-        completion = groq_client.chat.completions.create(
+        # First API call to Groq with tools enabled
+        response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are an advanced AI assistant under the user's direct command, capable of programming and self-improvement."},
-                {"role": "user", "content": user_text}
-            ],
-            temperature=0.7,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=0.7
         )
-        reply = completion.choices[0].message.content
-        await update.message.reply_text(reply)
+        
+        response_message = response.choices[0].message
+        
+        # Check if the model wants to call a tool (Self-Coding)
+        if response_message.tool_calls:
+            messages.append(response_message)
+            for tool_call in response_message.tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+                
+                if function_name == "update_code":
+                    await update.message.reply_text("⏳ AI က ကုဒ်ကို ကိုယ်တိုင်ရေးသားပြီး GitHub သို့ တင်နေပါပြီ...")
+                    tool_result = coder.update_code(
+                        file_path=function_args.get("file_path"),
+                        new_code=function_args.get("new_code"),
+                        commit_message=function_args.get("commit_message")
+                    )
+                    messages.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": tool_result
+                    })
+            
+            # Second call to get the final response after tool execution
+            second_response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages
+            )
+            await update.message.reply_text(second_response.choices[0].message.content)
+        else:
+            await update.message.reply_text(response_message.content)
+            
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 if telegram_app:
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@app.get("/")
+def home():
+    return {"status": "Autonomous AI Agent with Self-Coding Tool is running!"}
 
 @app.on_event("startup")
 async def startup_event():
