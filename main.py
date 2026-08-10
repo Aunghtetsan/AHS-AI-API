@@ -1,9 +1,16 @@
+# ============================================================
+# AHS AI — V1
+# Telegram + Website + Myanmar/English + Memory
+# Self-Improvement Proposal + Main Code Protection
+# ============================================================
+
 import os
+import json
 import asyncio
 import logging
-import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -11,72 +18,49 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 from groq import Groq
 
 
 # ============================================================
-# AHS AI AGENT — PHASE 1
-# Foundation + Guardrails + Owner Security
-# ============================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-
-logger = logging.getLogger("ahs_ai")
-
-app = FastAPI(title="AHS AI Agent")
-
-
-# ============================================================
-# ENVIRONMENT / SECRETS
+# CONFIG
 # ============================================================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# OWNER VERIFICATION KEY
-OWNER_VERIFICATION_KEY = "AHS_SECRET_2065"
+MODEL = "llama-3.3-70b-versatile"
 
-EMERGENCY_OVERRIDE_KEY = os.getenv(
-    "EMERGENCY_OVERRIDE_KEY"
-)
+# Main code is protected.
+MAIN_FILE = Path("main.py")
 
-SESSION_MINUTES = int(
-    os.getenv("OWNER_SESSION_MINUTES", "60")
-)
+# AHS data is kept separately from the main code.
+DATA_DIR = Path("ahs_data")
+MEMORY_FILE = DATA_DIR / "memory.json"
+IMPROVEMENT_FILE = DATA_DIR / "improvements.json"
 
-PROTECTED_FILES = {
-    item.strip()
-    for item in os.getenv(
-        "PROTECTED_FILES",
-        "main.py",
-    ).split(",")
-    if item.strip()
-}
+DATA_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-# CONFIGURATION CHECK
+# LOGGING
 # ============================================================
 
-def get_missing_configuration():
-    required = {
-        "GROQ_API_KEY": GROQ_API_KEY,
-        "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
-        "OWNER_VERIFICATION_KEY": OWNER_VERIFICATION_KEY,
-    }
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
 
-    return [
-        name
-        for name, value in required.items()
-        if not value
-    ]
+logger = logging.getLogger("ahs")
+
+
+# ============================================================
+# FASTAPI
+# ============================================================
+
+app = FastAPI(title="AHS AI")
 
 
 # ============================================================
@@ -92,141 +76,300 @@ if GROQ_API_KEY:
 
 
 # ============================================================
-# TELEGRAM APPLICATION
+# MEMORY
 # ============================================================
 
-telegram_app = (
-    Application
-    .builder()
-    .token(TELEGRAM_TOKEN)
-    .updater(None)
-    .build()
-)
+def load_json(path: Path, default):
+    try:
+        if not path.exists():
+            return default
+
+        with path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            return json.load(file)
+
+    except Exception as error:
+        logger.error(
+            "Memory load error: %s",
+            error,
+        )
+        return default
 
 
-# ============================================================
-# OWNER SESSION
-# ============================================================
+def save_json(path: Path, data):
+    temp = path.with_suffix(".tmp")
 
-owner_sessions: Dict[int, datetime] = {}
+    with temp.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    temp.replace(path)
 
 
-def create_owner_session(user_id: int):
-    expires_at = (
-        datetime.now(timezone.utc)
-        + timedelta(minutes=SESSION_MINUTES)
+def get_memory(user_id: int):
+    memory = load_json(
+        MEMORY_FILE,
+        {},
     )
 
-    owner_sessions[user_id] = expires_at
-
-    return expires_at
-
-
-def is_owner_session_active(user_id: int) -> bool:
-
-    expires_at = owner_sessions.get(user_id)
-
-    if not expires_at:
-        return False
-
-    now = datetime.now(timezone.utc)
-
-    if now >= expires_at:
-        owner_sessions.pop(user_id, None)
-        return False
-
-    return True
-
-
-def logout_owner(user_id: int):
-    owner_sessions.pop(user_id, None)
-
-
-# ============================================================
-# ACTION CLASSIFICATION / GUARDRAILS
-# ============================================================
-
-CRITICAL_KEYWORDS = {
-    "delete",
-    "destroy",
-    "merge",
-    "deploy",
-    "production",
-    "wallet",
-    "payment",
-    "money",
-    "withdraw",
-    "transfer",
-    "trading",
-    "buy",
-    "sell",
-    "secret",
-    "api key",
-    "token",
-    "password",
-    "owner",
-    "permission",
-    "main.py",
-    "security",
-    "guardrails",
-    "recovery",
-}
-
-
-def contains_critical_action(text: str) -> bool:
-
-    normalized = text.lower()
-
-    return any(
-        keyword in normalized
-        for keyword in CRITICAL_KEYWORDS
+    return memory.get(
+        str(user_id),
+        [],
     )
 
 
-def is_protected_file(path: str) -> bool:
-
-    if not path:
-        return False
-
-    normalized = (
-        path.strip()
-        .lstrip("/")
+def save_memory(
+    user_id: int,
+    role: str,
+    content: str,
+):
+    memory = load_json(
+        MEMORY_FILE,
+        {},
     )
 
-    if normalized in PROTECTED_FILES:
-        return True
+    user_key = str(user_id)
 
-    dangerous_paths = (
-        ".env",
-        ".git/",
-        ".git\\",
-        "credentials",
-        "secrets",
+    if user_key not in memory:
+        memory[user_key] = []
+
+    memory[user_key].append(
+        {
+            "role": role,
+            "content": content,
+            "time": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
     )
 
-    lower_path = normalized.lower()
+    # Keep memory small and useful.
+    memory[user_key] = memory[user_key][-20:]
 
-    return any(
-        item in lower_path
-        for item in dangerous_paths
+    save_json(
+        MEMORY_FILE,
+        memory,
     )
 
 
 # ============================================================
-# SECRET COMPARISON
+# SELF-IMPROVEMENT
 # ============================================================
 
-def verify_secret(
-    supplied: str,
-    expected: Optional[str],
-) -> bool:
+def save_improvement_proposal(
+    user_id: int,
+    problem: str,
+    proposal: str,
+):
+    improvements = load_json(
+        IMPROVEMENT_FILE,
+        [],
+    )
 
-    if not supplied or not expected:
-        return False
+    improvements.append(
+        {
+            "user_id": user_id,
+            "problem": problem,
+            "proposal": proposal,
+            "status": "PROPOSED",
+            "time": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+    )
 
-    return secrets.compare_digest(
-        supplied,
-        expected,
+    save_json(
+        IMPROVEMENT_FILE,
+        improvements,
+    )
+
+
+# ============================================================
+# SYSTEM PROMPT
+# ============================================================
+
+SYSTEM_PROMPT = """
+You are AHS AI.
+
+You are a helpful AI assistant designed for the Owner.
+
+LANGUAGE:
+
+1. Understand Burmese naturally.
+2. Speak Burmese naturally and clearly.
+3. Understand English.
+4. Translate English to Burmese accurately.
+5. Translate Burmese to English accurately.
+6. If the user mixes Burmese and English, understand both.
+
+GENERAL BEHAVIOR:
+
+1. Follow the user's legitimate instructions.
+2. Answer directly.
+3. Do not unnecessarily repeat the user's message.
+4. Do not generate repetitive answers.
+5. Be honest about what you can and cannot do.
+6. Never claim that you changed a file unless a real file
+   operation actually happened.
+
+CODING:
+
+You can:
+- Write code.
+- Explain code.
+- Debug code.
+- Improve code.
+- Design software architecture.
+- Suggest safer implementations.
+
+MAIN CODE PROTECTION:
+
+The Main Code is protected.
+
+Never:
+- Delete main.py automatically.
+- Replace main.py automatically.
+- Rewrite unrelated existing code.
+- Modify unrelated files.
+- Remove working code without a clear reason.
+- Claim that a protected file was changed when it was not.
+
+If a Main Code change is necessary:
+
+1. Identify the exact required change.
+2. Explain why it is necessary.
+3. Create a proposed change.
+4. Preserve the existing code.
+5. Test the proposed change separately when possible.
+6. Ask the Owner for approval.
+7. Only after explicit Owner approval may the change
+   be applied.
+
+SELF-IMPROVEMENT:
+
+You should continuously look for ways to improve:
+
+- Response quality.
+- Burmese language quality.
+- Translation quality.
+- Code quality.
+- Error handling.
+- Performance.
+- Memory organization.
+- Reliability.
+
+However:
+
+Self-improvement does NOT give you permission to modify
+the Main Code automatically.
+
+You may create improvement proposals.
+
+You may analyze problems.
+
+You may create new code proposals.
+
+You may test ideas in a safe environment.
+
+But Main Code changes require Owner approval.
+
+SAFETY:
+
+Never expose API keys, passwords, tokens or private secrets.
+
+Never pretend to have permissions that you do not have.
+
+The Owner remains in control of protected changes.
+"""
+
+
+# ============================================================
+# GROQ
+# ============================================================
+
+def ask_groq_sync(
+    user_text: str,
+    memory: list,
+) -> str:
+
+    if not groq_client:
+        raise RuntimeError(
+            "GROQ_API_KEY is missing."
+        )
+
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        }
+    ]
+
+    # Add recent memory.
+    for item in memory[-10:]:
+        messages.append(
+            {
+                "role": item["role"],
+                "content": item["content"],
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": user_text,
+        }
+    )
+
+    completion = (
+        groq_client
+        .chat
+        .completions
+        .create(
+            model=MODEL,
+            temperature=0.3,
+            max_tokens=1500,
+            messages=messages,
+        )
+    )
+
+    if not completion.choices:
+        raise RuntimeError(
+            "AI returned no response."
+        )
+
+    response = (
+        completion
+        .choices[0]
+        .message
+        .content
+    )
+
+    if not response:
+        raise RuntimeError(
+            "AI returned an empty response."
+        )
+
+    return response.strip()
+
+
+async def ask_groq(
+    user_text: str,
+    memory: list,
+) -> str:
+
+    return await asyncio.to_thread(
+        ask_groq_sync,
+        user_text,
+        memory,
     )
 
 
@@ -243,273 +386,18 @@ async def start_command(
         return
 
     await update.message.reply_text(
-        "မင်္ဂလာပါ။ AHS AI Agent မှ ကြိုဆိုပါတယ်။\n\n"
-        "🟢 ပုံမှန်အလုပ်များ — Owner verification မလိုပါ။\n"
-        "🔐 Protected action များအတွက် — Owner verification လိုပါမယ်။\n\n"
-        "/unlock <Owner Key> — Owner session ဖွင့်ရန်\n"
-        "/status — Session အခြေအနေကြည့်ရန်\n"
-        "/logout — Owner session ပိတ်ရန်"
+        "မင်္ဂလာပါ 👋\n\n"
+        "ကျွန်တော် AHS AI ပါ။\n"
+        "မြန်မာ/English စကားပြောနိုင်ပါတယ်။\n"
+        "ဘာသာပြန်၊ coding၊ debugging နဲ့ "
+        "အထွေထွေ AI အကူအညီတွေ ပေးနိုင်ပါတယ်။\n\n"
+        "Main Code ကိုတော့ ပိုင်ရှင်ခွင့်ပြုချက်မရှိဘဲ "
+        "မပြင်ဆင်ပါ။"
     )
 
 
 # ============================================================
-# OWNER UNLOCK
-# ============================================================
-
-async def unlock_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not update.message:
-        return
-
-    user_id = update.effective_user.id
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "🔐 Owner verification လုပ်ရန်\n\n"
-            "/unlock <Owner Key>"
-        )
-
-        return
-
-    supplied_key = " ".join(context.args)
-
-    if not verify_secret(
-        supplied_key,
-        OWNER_VERIFICATION_KEY,
-    ):
-
-        logger.warning(
-            "Failed owner verification: user_id=%s",
-            user_id,
-        )
-
-        await update.message.reply_text(
-            "❌ Owner verification မအောင်မြင်ပါ။"
-        )
-
-        return
-
-    expires_at = create_owner_session(user_id)
-
-    logger.info(
-        "Owner session created: user_id=%s",
-        user_id,
-    )
-
-    await update.message.reply_text(
-        "✅ Owner verification အောင်မြင်ပါပြီ။\n\n"
-        f"🕐 Session: {SESSION_MINUTES} မိနစ်\n"
-        "🟢 Routine tasks — ပုံမှန်လုပ်နိုင်ပါတယ်။\n"
-        "🔴 Critical actions — ထပ်မံအတည်ပြုရပါမယ်။\n\n"
-        f"Expires: "
-        f"{expires_at.strftime('%Y-%m-%d %H:%M UTC')}"
-    )
-
-
-# ============================================================
-# /logout
-# ============================================================
-
-async def logout_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not update.message:
-        return
-
-    user_id = update.effective_user.id
-
-    logout_owner(user_id)
-
-    await update.message.reply_text(
-        "🔒 Owner session ပိတ်လိုက်ပါပြီ။"
-    )
-
-
-# ============================================================
-# /status
-# ============================================================
-
-async def status_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not update.message:
-        return
-
-    user_id = update.effective_user.id
-
-    if is_owner_session_active(user_id):
-
-        expires_at = owner_sessions[user_id]
-
-        await update.message.reply_text(
-            "🟢 Owner session ACTIVE\n"
-            f"Expires: "
-            f"{expires_at.strftime('%Y-%m-%d %H:%M UTC')}"
-        )
-
-    else:
-
-        await update.message.reply_text(
-            "⚪ Owner session မရှိပါ။"
-        )
-
-
-# ============================================================
-# AI SYSTEM PROMPT
-# ============================================================
-
-SYSTEM_PROMPT = """
-You are AHS AI Agent.
-
-You are operating in Phase 1.
-
-MAIN PRINCIPLES:
-
-1. Help the user naturally and directly.
-2. Answer the user's actual question.
-3. Do not blindly repeat the user's message.
-4. Do not continue or imitate repetitive text from the user.
-5. Do not unnecessarily ask for Owner verification.
-6. Never expose secrets, API keys, passwords or tokens.
-7. Never pretend that a file was changed if no file tool changed it.
-8. Prefer small and reversible changes.
-9. Explain important changes clearly.
-10. Keep the Owner in control of critical actions.
-
-RESPONSE QUALITY:
-
-- Do not echo the user's entire message.
-- Do not repeat the same sentence multiple times.
-- If the user repeats a sentence many times, respond once and
-  explain what it means or ask what they want to accomplish.
-- Be concise when the request is simple.
-- Respond naturally in the language used by the user.
-- Burmese is supported and should be answered naturally when
-  the user speaks Burmese.
-
-ACCESS LEVELS:
-
-GREEN — Routine:
-- General conversation
-- Questions
-- Code analysis
-- Reading logs
-- Cache management
-- Testing
-- Documentation
-- Safe non-critical development
-
-No Owner verification required.
-
-YELLOW — Controlled:
-- Large refactoring
-- Dependency changes
-- Architecture changes
-- Large project modifications
-
-Explain the plan before execution.
-
-RED — Protected:
-- Main/protected code
-- Security system
-- Owner permissions
-- Recovery system
-- Secrets
-- API keys
-- Deployment
-- Destructive operations
-- Money
-- Wallets
-- Real-money trading
-
-These require Owner verification and explicit approval.
-
-IMPORTANT:
-
-Do not treat every coding request as a protected action.
-
-Only protect actions that actually cross a critical
-security or ownership boundary.
-
-The goal is to provide maximum useful autonomy while
-keeping critical controls under the Owner.
-"""
-
-
-# ============================================================
-# GROQ CALL
-# ============================================================
-
-def ask_groq_sync(
-    user_text: str,
-) -> str:
-
-    if not groq_client:
-        raise RuntimeError(
-            "GROQ_API_KEY is not configured."
-        )
-
-    completion = (
-        groq_client
-        .chat
-        .completions
-        .create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.2,
-            max_tokens=1200,
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": user_text,
-                },
-            ],
-        )
-    )
-
-    if not completion.choices:
-        raise RuntimeError(
-            "Groq returned no choices."
-        )
-
-    content = (
-        completion
-        .choices[0]
-        .message
-        .content
-    )
-
-    if not content:
-        raise RuntimeError(
-            "Groq returned empty response."
-        )
-
-    return content.strip()
-
-
-async def ask_groq(
-    user_text: str,
-) -> str:
-
-    return await asyncio.to_thread(
-        ask_groq_sync,
-        user_text,
-    )
-
-
-# ============================================================
-# MESSAGE HANDLER
+# TELEGRAM MESSAGE
 # ============================================================
 
 async def handle_message(
@@ -532,84 +420,91 @@ async def handle_message(
     if not user_text:
         return
 
-    owner_active = (
-        is_owner_session_active(user_id)
-    )
-
-    critical = contains_critical_action(
-        user_text
-    )
-
-    # --------------------------------------------------------
-    # PROTECTED ACTION
-    # --------------------------------------------------------
-
-    if critical and not owner_active:
-
-        await update.message.reply_text(
-            "🔒 ဒီလုပ်ဆောင်ချက်က Protected Action ဖြစ်နိုင်ပါတယ်။\n\n"
-            "Owner verification မရှိသေးပါ။\n"
-            "ပထမဆုံး Owner session ဖွင့်ပါ။\n\n"
-            "/unlock <Owner Key>"
-        )
-
-        logger.warning(
-            "Blocked protected action: user_id=%s",
-            user_id,
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # NORMAL AI REQUEST
-    # --------------------------------------------------------
-
     try:
 
-        response_text = await ask_groq(
-            user_text
+        memory = get_memory(
+            user_id
         )
 
-        if not response_text:
-            response_text = (
-                "တောင်းပန်ပါတယ်။ AI က အဖြေမရရှိသေးပါ။"
-            )
+        response = await ask_groq(
+            user_text,
+            memory,
+        )
 
-        max_message_length = 4000
+        save_memory(
+            user_id,
+            "user",
+            user_text,
+        )
+
+        save_memory(
+            user_id,
+            "assistant",
+            response,
+        )
+
+        # Telegram message limit protection.
+        max_length = 4000
 
         for start in range(
             0,
-            len(response_text),
-            max_message_length,
+            len(response),
+            max_length,
         ):
 
-            chunk = response_text[
-                start:start + max_message_length
-            ]
-
             await update.message.reply_text(
-                chunk
+                response[
+                    start:start + max_length
+                ]
             )
 
         logger.info(
-            "Request handled: "
-            "user_id=%s owner=%s critical=%s",
+            "Telegram request completed: %s",
             user_id,
-            owner_active,
-            critical,
         )
 
-    except Exception:
+    except Exception as error:
 
         logger.exception(
-            "AI request failed: user_id=%s",
-            user_id,
+            "Telegram AI error: %s",
+            error,
         )
 
         await update.message.reply_text(
-            "⚠️ AI request မအောင်မြင်ပါ။ "
+            "⚠️ AI request မအောင်မြင်ပါ။\n"
             "ခဏနေပြီး ထပ်ကြိုးစားပါ။"
         )
+
+
+# ============================================================
+# TELEGRAM SETUP
+# ============================================================
+
+telegram_app: Optional[Application] = None
+
+if TELEGRAM_TOKEN:
+
+    telegram_app = (
+        Application
+        .builder()
+        .token(TELEGRAM_TOKEN)
+        .updater(None)
+        .build()
+    )
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "start",
+            start_command,
+        )
+    )
+
+    telegram_app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_message,
+        )
+    )
 
 
 # ============================================================
@@ -617,36 +512,49 @@ async def handle_message(
 # ============================================================
 
 @app.on_event("startup")
-async def startup_event():
+async def startup():
 
-    missing = get_missing_configuration()
-
-    if missing:
-
-        logger.error(
-            "Missing configuration: %s",
-            ", ".join(missing),
+    if not GROQ_API_KEY:
+        logger.warning(
+            "GROQ_API_KEY is not configured."
         )
 
-    await telegram_app.initialize()
-
-    if WEBHOOK_URL:
-
-        webhook_url = (
-            f"{WEBHOOK_URL.rstrip('/')}/webhook"
+    if not TELEGRAM_TOKEN:
+        logger.warning(
+            "TELEGRAM_TOKEN is not configured."
         )
 
-        await telegram_app.bot.set_webhook(
-            url=webhook_url
-        )
+    if telegram_app:
+
+        await telegram_app.initialize()
+
+        await telegram_app.start()
 
         logger.info(
-            "Telegram webhook configured."
+            "Telegram application started."
         )
 
     logger.info(
-        "AHS AI Agent Phase 1 started."
+        "AHS AI started."
     )
+
+
+# ============================================================
+# SHUTDOWN
+# ============================================================
+
+@app.on_event("shutdown")
+async def shutdown():
+
+    if telegram_app:
+
+        await telegram_app.stop()
+
+        await telegram_app.shutdown()
+
+        logger.info(
+            "Telegram application stopped."
+        )
 
 
 # ============================================================
@@ -657,6 +565,11 @@ async def startup_event():
 async def telegram_webhook(
     request: Request,
 ):
+
+    if not telegram_app:
+        return {
+            "status": "telegram_not_configured"
+        }
 
     data = await request.json()
 
@@ -675,77 +588,99 @@ async def telegram_webhook(
 
 
 # ============================================================
+# WEBSITE / API
+# ============================================================
+
+@app.post("/api/chat")
+async def website_chat(
+    request: Request,
+):
+
+    data = await request.json()
+
+    user_text = str(
+        data.get(
+            "message",
+            "",
+        )
+    ).strip()
+
+    if not user_text:
+        return {
+            "error": "message is required"
+        }
+
+    # Website uses user_id 0 for basic V1 memory.
+    user_id = 0
+
+    try:
+
+        memory = get_memory(
+            user_id
+        )
+
+        response = await ask_groq(
+            user_text,
+            memory,
+        )
+
+        save_memory(
+            user_id,
+            "user",
+            user_text,
+        )
+
+        save_memory(
+            user_id,
+            "assistant",
+            response,
+        )
+
+        return {
+            "status": "ok",
+            "response": response,
+        }
+
+    except Exception as error:
+
+        logger.exception(
+            "Website AI error: %s",
+            error,
+        )
+
+        return {
+            "status": "error",
+            "message": "AI request failed",
+        }
+
+
+# ============================================================
 # HEALTH CHECK
 # ============================================================
 
 @app.get("/health")
-async def health_check():
-
-    missing = get_missing_configuration()
+async def health():
 
     return {
-        "status": "AHS AI Agent is running",
-        "phase": "Phase 1",
+        "status": "running",
+        "ai": bool(GROQ_API_KEY),
         "telegram": bool(TELEGRAM_TOKEN),
-        "groq": bool(GROQ_API_KEY),
-        "owner_security": bool(
-            OWNER_VERIFICATION_KEY
-        ),
-        "protected_files": list(
-            PROTECTED_FILES
-        ),
-        "configuration_ok": not missing,
+        "main_code_protected": True,
+        "memory": True,
+        "self_improvement": True,
+        "version": "AHS V1",
     }
 
 
 # ============================================================
-# ROOT
+# HOME
 # ============================================================
 
 @app.get("/")
-async def root():
+async def home():
 
     return {
-        "status": "AHS AI Agent is running",
-        "phase": "Phase 1",
-    }
-
-
-# ============================================================
-# TELEGRAM HANDLERS
-# ============================================================
-
-telegram_app.add_handler(
-    CommandHandler(
-        "start",
-        start_command,
-    )
-)
-
-telegram_app.add_handler(
-    CommandHandler(
-        "unlock",
-        unlock_command,
-    )
-)
-
-telegram_app.add_handler(
-    CommandHandler(
-        "logout",
-        logout_command,
-    )
-)
-
-telegram_app.add_handler(
-    CommandHandler(
-        "status",
-        status_command,
-    )
-)
-
-telegram_app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_message,
-    )
-        )
+        "name": "AHS AI",
+        "status": "running",
+        "version": "V1",
+            }
