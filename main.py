@@ -1,4 +1,4 @@
-@import os
+import os
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -7,35 +7,36 @@ from groq import Groq
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Key များနှင့် Configurations
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8657916151:AAHxxaV1...")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# မြန်မာလို သဘာဝကျကျနှင့် တိုတိုရှင်းရှင်း ဖြေဆိုရန် System Prompt
+# မြန်မာလို လူသားတစ်ယောက်လို သဘာဝကျကျ စကားပြောစေရန် အကောင်းဆုံး Prompt
 system_prompt = """
-မင်းက နာမည် AHS AI ဖြစ်ပြီး မြန်မာလို အလွန်သဘာဝကျကျ၊ ယဉ်ကျေးပြေပြစ်စွာ ဖြေကြားပေးတဲ့ AI အကူဖြစ်တယ်။
-စည်းကမ်းများ:
-၁။ မြန်မာစာလုံးပေါင်းနှင့် ဝါကျဖွဲ့ထုံးကို မှန်ကန်အောင်သုံးပါ။
-၂။ စာကြောင်းများကို ထပ်ခါထပ်ခါ ပြန်မပြောပါနဲ့။ တိုတိုနှင့် ရှင်းရှင်းလင်းလင်း ဖြေပါ။
-၃။ သဘာဝကျသော စကားပြောဟန် ရေးပါ။
+မင်းက AHS AI လို့အမည်ရတဲ့ ဖော်ရွေပြီး အသိပညာဗဟုသုတကြွယ်ဝတဲ့ AI အကူတစ်ယောက်ဖြစ်တယ်။
+စကားပြောရာတွင် အောက်ပါအတိုင်း လိုက်နာပါ -
+၁။ စာအုပ်ဆန်သော စကားလုံးများကို ရှောင်ပြီး လူချင်း သဘာဝကျကျ စကားပြောသကဲ့သို့ "ငါ"၊ "မင်း"၊ "ပါတယ်"၊ "တယ်" စသည်ဖြင့် ပြေပြစ်စွာ ပြောပါ။
+၂။ စာကြောင်း သို့မဟုတ် စာပိုဒ်များကို ထပ်ခါထပ်ခါ လုံးဝ ပြန်မပြောပါနဲ့။
+၃။ မေးခွန်းများကို တိုတိုရှင်းရှင်းနှင့် လိုရင်းတိုရှင်း ထိထိရောက်ရောက် ဖြေပေးပါ။
+၄။ စတော့ သို့မဟုတ် စီးပွားရေးအကြောင်းမေးပါက အဓိကအချက်များကို ရှင်းလင်းစွာ ရှင်းပြပါ။
 """
 
-# Telegram Bot Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("မင်္ဂလာပါ! ငါက AHS AI Bot ပါ။ ဘာများ ကူညီပေးရမလဲ။")
+    await update.message.reply_text("မင်္ဂလာပါ! ငါက AHS AI ပါ။ ဘာတွေ ကူညီပေးရမလဲ၊ လွတ်လပ်စွာ မေးလို့ရပါတယ်နော်။")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     try:
         response = client.chat.completions.create(
-            model="llama3-8b-8192",  # မြန်မာစာလုံးပေါင်း မထပ်စေရန် Model ပြောင်းထားသည်
+            model="llama-3.3-70b-versatile", # Groq ရဲ့ အမြင့်ဆုံးနှင့် အကောင်းဆုံး Free Model
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.5,
+            temperature=0.6,
+            presence_penalty=0.8, # စာကြောင်း ထပ်မသွားစေရန် တားမြစ်သည့် တန်ဖိုး
+            frequency_penalty=0.8,
             max_tokens=1024
         )
         reply = response.choices[0].message.content
@@ -44,7 +45,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(reply)
 
-# Render ပေါ်မှာ FastAPI နဲ့ Telegram Bot တွဲဖက် run ရန် Lifespan Handler
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -63,7 +63,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def home():
-    return {"status": "Online", "message": "AHS AI & Telegram Bot အလုပ်လုပ်နေပါပြီ"}
+    return {"status": "Online", "model": "Llama 3.3 70B"}
 
 class ChatRequest(BaseModel):
     message: str
@@ -72,12 +72,14 @@ class ChatRequest(BaseModel):
 def chat_api(request: ChatRequest):
     try:
         response = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.message}
             ],
-            temperature=0.5,
+            temperature=0.6,
+            presence_penalty=0.8,
+            frequency_penalty=0.8,
             max_tokens=1024
         )
         return {"reply": response.choices[0].message.content}
