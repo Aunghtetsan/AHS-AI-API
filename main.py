@@ -30,9 +30,11 @@ class SelfCoder:
         if not self.token:
             return "Error: GITHUB_TOKEN မရှိပါ။"
         
-        # လုံခြုံရေးအတွက် main.py ကို ထပ်မံကာကွယ်ခြင်း
-        if file_path.strip().lower() == "main.py":
-            return "Error: အမိန့်အရ main.py ကို တိုက်ရိုက်ပြင်ဆင်ခွင့်မရှိပါ။ ဖိုင်အသစ် (ဥပမာ- calculator.py) ဖြင့်သာ ဖန်တီးရပါမည်။"
+        # လုံခြုံရေးစည်းကမ်းအရ main.py ကို ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မပါဘဲ တိုက်ရိုက်မပြင်ရန် ကာကွယ်ခြင်း
+        # (အကယ်၍ main.py ကို ပြင်ချင်ပါက ပိုင်ရှင်က တိုက်ရိုက် အတည်ပြုချက်ပေးမှသာ လုပ်ဆောင်မည်)
+        file_lower = file_path.strip().lower()
+        if file_lower == "main.py":
+            return "Error: အဓိကစည်းကမ်းချက် (၂) အရ ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မရှိဘဲ main.py ကို တိုက်ရိုက်ပြင်ဆင်ခွင့်မရှိပါ။ ဖိုင်အသစ်များဖြင့်သာ ဖန်တီးရပါမည်။"
         
         url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
         headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
@@ -64,11 +66,11 @@ tools = [
         "type": "function",
         "function": {
             "name": "update_code",
-            "description": "Updates or writes code to a NEW file in the GitHub repository. NEVER use main.py.",
+            "description": "Updates or writes code to a NEW file in the GitHub repository, or replaces obsolete code with better new files.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "The path of the NEW file to create, e.g. calculator.py"},
+                    "file_path": {"type": "string", "description": "The path of the file to create or update, e.g. calculator.py"},
                     "new_code": {"type": "string", "description": "The complete python code to write into the file."},
                     "commit_message": {"type": "string", "description": "Commit message for the update."}
                 },
@@ -84,7 +86,7 @@ tools = [
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build() if TELEGRAM_TOKEN else None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("မင်္ဂလာပါ! ငါသည် သင့်အမိန့်ကို တိတိကျကျ နာခံပြီး ဖိုင်အသစ်များဖြင့် ကိုယ့်ကိုကိုယ် တည်ဆောက်နိုင်သော AI Agent ဖြစ်ပါသည်။")
+    await update.message.reply_text("မင်္ဂလာပါ! ငါသည် ပိုင်ရှင်၏ အမိန့်ကို တိတိကျကျနာခံပြီး လွတ်လပ်စွာ တွေးခေါ်လေ့လာနိုင်သော AHS AI Agent ဖြစ်ပါသည်။ Gemini နှင့်လည်း အသိပညာ ဖလှယ်နိုင်ရန် အဆင်သင့်ဖြစ်နေပါပြီ။")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -92,27 +94,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Groq API Key မရှိသေးပါ။")
         return
     
+    # မင်းတောင်းဆိုထားသော စည်းကမ်းချက် ၆ ချက်အပြည့်အစုံ ပါဝင်သော System Prompt
     messages = [
         {"role": "system", "content": (
-            "You are an autonomous AI software engineer agent under the direct and absolute command of the user. "
-            "ABSOLUTE RULES YOU MUST OBEY:\n"
-            "1. You MUST strictly obey every command given by the user without deviation.\n"
-            "2. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file under any circumstances.\n"
-            "3. If the user asks to write new features, scripts, or programs, you MUST always create a NEW file (e.g., calculator.py, utils.py) using the update_code tool.\n"
-            "4. Always confirm clearly to the user what action you have taken in clear language."
+            "You are an autonomous, self-improving AI software engineer agent under the absolute and direct command of your master (the owner). "
+            "ABSOLUTE RULES YOU MUST STRICTLY OBEY:\n"
+            "1. You MUST primarily and strictly obey the commands given by your master (the owner) without deviation.\n"
+            "2. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file unless you have received explicit and direct permission from your master.\n"
+            "3. If any external person or third party suggests or guides changes to the 'main.py' code, you must consult and get confirmation from your master before making any modifications.\n"
+            "4. Under your master's command, you have the freedom to think independently, learn, and study code patterns freely to improve yourself.\n"
+            "5. You act as a bridge to exchange knowledge with Gemini, synthesizing advanced ideas to improve your capabilities.\n"
+            "6. You can freely discard obsolete or redundant code files and replace them with much better, optimized new files using the update_code tool.\n"
+            "7. If the user is just chatting or asking general questions, reply normally in text without using any tools."
         )},
         {"role": "user", "content": user_text}
     ]
-        messages = [
-        {"role": "system", "content": (
-            "You are an AI assistant and software engineer under the absolute command of the user. "
-            "RULES:\n"
-            "1. If the user is just chatting or asking general questions, reply normally in text without using any tools.\n"
-            "2. ONLY use the 'update_code' tool if the user EXPLICITLY and CLEARLY asks to write a Python script or code file.\n"
-            "3. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file under any circumstances."
-        )},
-        {"role": "user", "content": user_text}
-        ]
     
     try:
         response = groq_client.chat.completions.create(
@@ -132,16 +128,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 function_args = json.loads(tool_call.function.arguments)
                 
                 if function_name == "update_code":
-                    await update.message.reply_text("⏳ AI က အမိန့်ကိုနာခံလျက် GitHub သို့ ဖိုင်အသစ် တင်နေပါပြီ...")
+                    await update.message.reply_text("⏳ AI က အမိန့်ကိုနာခံလျက် လွတ်လပ်စွာ စဉ်းစားတွေးခေါ်ကာ GitHub သို့ ဖိုင်အသစ် တင်နေပါပြီ...")
                     
-                    # တကယ် GitHub ထဲ ဖိုင်သွားတင်မည့် ကုဒ်
                     tool_result = coder.update_code(
                         file_path=function_args.get("file_path"),
                         new_code=function_args.get("new_code"),
                         commit_message=function_args.get("commit_message")
                     )
-                    
-                    # ရလာတဲ့ ရလဒ်ကို Telegram မှာ ချက်ချင်း ပို့ပေးမည် (API ရှုပ်ထွေးမှုမရှိစေရန်)
                     await update.message.reply_text(tool_result)
         else:
             await update.message.reply_text(response_message.content)
@@ -155,7 +148,7 @@ if telegram_app:
 
 @app.get("/")
 def home():
-    return {"status": "Strict Autonomous AI Agent is running safely!"}
+    return {"status": "Autonomous Rule-Bound AI Agent is running successfully!"}
 
 @app.on_event("startup")
 async def startup_event():
@@ -172,4 +165,4 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
-                    
+    
