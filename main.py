@@ -19,7 +19,6 @@ from groq import Groq
 
 # ============================================================
 # AHS AI AGENT — PHASE 1
-# Foundation + Guardrails + Owner Security
 # ============================================================
 
 logging.basicConfig(
@@ -40,7 +39,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# OWNER VERIFICATION KEY (Hard-coded as requested)
+# OWNER VERIFICATION KEY
 OWNER_VERIFICATION_KEY = "AHS_SECRET_2065"
 
 EMERGENCY_OVERRIDE_KEY = os.getenv(
@@ -112,6 +111,7 @@ owner_sessions: Dict[int, datetime] = {}
 
 
 def create_owner_session(user_id: int):
+
     expires_at = (
         datetime.now(timezone.utc)
         + timedelta(minutes=SESSION_MINUTES)
@@ -132,16 +132,19 @@ def is_owner_session_active(user_id: int) -> bool:
     now = datetime.now(timezone.utc)
 
     if now >= expires_at:
+
         owner_sessions.pop(
             user_id,
             None,
         )
+
         return False
 
     return True
 
 
 def logout_owner(user_id: int):
+
     owner_sessions.pop(
         user_id,
         None,
@@ -514,9 +517,7 @@ async def handle_message(
     if not user_text:
         return
 
-    owner_active = (
-        is_owner_session_active(user_id)
-    )
+    owner_active = is_owner_session_active(user_id)
 
     critical = contains_critical_action(
         user_text
@@ -577,13 +578,23 @@ async def handle_message(
         )
 
     except Exception as e:
-    logger.exception(
-        "AI request failed: user_id=%s",
-        user_id,
-    )
-    await update.message.reply_text(
-        f"❌ AI Error:\n{type(e).__name__}: {str(e)[:1500]}"
-    )
+
+        logger.exception(
+            "AI request failed: user_id=%s",
+            user_id,
+        )
+
+        error_text = (
+            f"❌ AI Error:\n"
+            f"{type(e).__name__}: "
+            f"{str(e)[:1500]}"
+        )
+
+        await update.message.reply_text(
+            error_text
+        )
+
+
 # ============================================================
 # STARTUP
 # ============================================================
@@ -708,4 +719,3 @@ telegram_app.add_handler(
         handle_message,
     )
     )
-    
