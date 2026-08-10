@@ -576,12 +576,16 @@ async def handle_message(
             critical,
         )
 
-    except Exception:
+    except Exception as e:
 
-        logger.exception(
-            "AI request failed: user_id=%s",
-            user_id,
-        )
+    logger.exception(
+        "AI request failed: user_id=%s",
+        user_id,
+    )
+
+    await update.message.reply_text(
+        f"❌ AI Error:\n{type(e).__name__}: {str(e)[:1500]}"
+    )
 
         await update.message.reply_text(
             "⚠️ AI request မအောင်မြင်ပါ။ "
