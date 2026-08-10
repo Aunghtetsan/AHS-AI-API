@@ -173,4 +173,47 @@ def chat_api(request: ChatRequest):
         return {"reply": reply}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+import os
+import base64
+import requests
+
+# AI က သူ့အလိုလို ကုဒ်ရေးပြီး GitHub မှာ တင်မည့် SelfCoder Class
+class SelfCoder:
+    def __init__(self):
+        self.token = os.environ.get("GITHUB_TOKEN")
+        self.repo = "Aunghtetsan/AHS-AI-API"  # မင်းရဲ့ GitHub Repo 
+        self.branch = "main"
+
+    def update_code(self, file_path, new_code, commit_message):
+        if not self.token:
+            return "Error: GITHUB_TOKEN မရှိပါ။"
         
+        url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
+        
+        # 1. Get current file SHA
+        res = requests.get(url, headers=headers)
+        if res.status_code != 200:
+            return f"Error getting file: {res.text}"
+        
+        sha = res.json().get("sha")
+        
+        # 2. Encode new code to base64
+        encoded_content = base64.b64encode(new_code.encode("utf-8")).decode("utf-8")
+        
+        # 3. Commit new code to GitHub
+        data = {
+            "message": commit_message,
+            "content": encoded_content,
+            "sha": sha,
+            "branch": self.branch
+        }
+        
+        put_res = requests.put(url, headers=headers, json=data)
+        if put_res.status_code in [200, 201]:
+            return "အောင်မြင်ပါပြီ! AI က ကုဒ်အသစ်ရေးပြီး GitHub ကို တင်လိုက်ပါပြီ။ Render က အလိုအလျောက် Deploy ဆက်လုပ်ပါမည်။"
+        else:
+            return f"Failed: {put_res.text}"
+
+coder = SelfCoder()
+
