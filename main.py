@@ -103,6 +103,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )},
         {"role": "user", "content": user_text}
     ]
+        messages = [
+        {"role": "system", "content": (
+            "You are an AI assistant and software engineer under the absolute command of the user. "
+            "RULES:\n"
+            "1. If the user is just chatting or asking general questions, reply normally in text without using any tools.\n"
+            "2. ONLY use the 'update_code' tool if the user EXPLICITLY and CLEARLY asks to write a Python script or code file.\n"
+            "3. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file under any circumstances."
+        )},
+        {"role": "user", "content": user_text}
+        ]
     
     try:
         response = groq_client.chat.completions.create(
