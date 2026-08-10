@@ -105,7 +105,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     try:
-        # First API call to Groq with tools enabled
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
@@ -116,33 +115,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         response_message = response.choices[0].message
         
-        # Check if the model wants to call a tool (Self-Coding)
+        # Tool Call ရှိမရှိ စစ်ဆေးခြင်း
         if response_message.tool_calls:
-            messages.append(response_message)
             for tool_call in response_message.tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
                 if function_name == "update_code":
-                    await update.message.reply_text("⏳ AI က အမိန့်ကိုနာခံလျက် ကုဒ်အသစ်ရေးသားနေပါပြီ...")
+                    await update.message.reply_text("⏳ AI က အမိန့်ကိုနာခံလျက် GitHub သို့ ဖိုင်အသစ် တင်နေပါပြီ...")
+                    
+                    # တကယ် GitHub ထဲ ဖိုင်သွားတင်မည့် ကုဒ်
                     tool_result = coder.update_code(
                         file_path=function_args.get("file_path"),
                         new_code=function_args.get("new_code"),
                         commit_message=function_args.get("commit_message")
                     )
-                    messages.append({
-                        "tool_call_id": tool_call.id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": tool_result
-                    })
-            
-            # Second call to get the final response after tool execution
-            second_response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages
-            )
-            await update.message.reply_text(second_response.choices[0].message.content)
+                    
+                    # ရလာတဲ့ ရလဒ်ကို Telegram မှာ ချက်ချင်း ပို့ပေးမည် (API ရှုပ်ထွေးမှုမရှိစေရန်)
+                    await update.message.reply_text(tool_result)
         else:
             await update.message.reply_text(response_message.content)
             
@@ -172,3 +162,4 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
+                    
