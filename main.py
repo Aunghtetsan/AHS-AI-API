@@ -1,187 +1,32 @@
 import os
-import asyncio
-from collections import defaultdict
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from groq import Groq
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-
-# API Keys များနှင့် Token များကို ထည့်ရန် (သို့မဟုတ် Render Environment Variable တွင် ထည့်ရန်)
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8657916151:AAF2djkVfW4u4tGIHQJSI-uGLRj7bPJywGE")
-
-client = Groq(api_key=GROQ_API_KEY)
-
-# User တစ်ယောက်ချင်းစီ၏ Chat History များကို မှတ်ထားရန် Memory
-user_memories = defaultdict(list)
-MAX_HISTORY = 10  # နောက်ဆုံး ပြောခဲ့သော စာကြောင်း ၁၀ ကြောင်းကို အမြဲမှတ်ထားမည်
-
-# AI ၏ စရိုက်နှင့် စကားပြောပုံစံ သတ်မှတ်ချက်
-system_prompt = """
-မင်းက AHS AI လို့အမည်ရတဲ့ ဖော်ရွေပြီး အသိပညာဗဟုသုတကြွယ်ဝတဲ့ AI အကူတစ်ယောက်ဖြစ်တယ်။
-စကားပြောရာတွင် အောက်ပါအတိုင်း လိုက်နာပါ -
-၁။ စာအုပ်ဆန်သော စကားလုံးများကို ရှောင်ပြီး လူချင်း သဘာဝကျကျ စကားပြောသကဲ့သို့ "ငါ"၊ "မင်း"၊ "ပါတယ်"၊ "တယ်" စသည်ဖြင့် ပြေပြစ်စွာ ပြောပါ။
-၂။ စာကြောင်း သို့မဟုတ် စာပိုဒ်များကို ထပ်ခါထပ်ခါ လုံးဝ ပြန်မပြောပါနဲ့။
-၃။ မေးခွန်းများကို တိုတိုရှင်းရှင်းနှင့် လိုရင်းတိုရှင်း ထိထိရောက်ရောက် ဖြေပေးပါ။
-၄။ စကားပြောဖူးသည့် ရှေ့က အကြောင်းအရာများကို အမြဲမှတ်မိနေပါစေ။
-"""
-
-# Telegram Bot - Start Command
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_memories[user_id] = []
-    await update.message.reply_text("မင်္ဂလာပါ! ငါက AHS AI ပါ။ Memory စနစ်ပါဝင်တာကြောင့် ရှေ့ကပြောခဲ့တာတွေကို မှတ်မိနေပါတယ်။ ဘာများ ကူညီပေးရမလဲ။")
-
-# Telegram Bot - Message Handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text
-
-    user_memories[user_id].append({"role": "user", "content": user_text})
-    if len(user_memories[user_id]) > MAX_HISTORY:
-        user_memories[user_id] = user_memories[user_id][-MAX_HISTORY:]
-
-    messages = [{"role": "system", "content": system_prompt}] + user_memories[user_id]
-
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            temperature=0.6,
-            presence_penalty=0.8,
-            frequency_penalty=0.8,
-            max_tokens=1024
-        )
-        reply = response.choices[0].message.content
-        user_memories[user_id].append({"role": "assistant", "content": reply})
-    except Exception as e:
-        reply = f"Error: {str(e)}"
-    
-    await update.message.reply_text(reply)
-
-# FastAPI Lifespan (Telegram Bot ကို Background တွင် တပြိုင်နက် Run ပေးရန်)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "မင်းရဲ့_Telegram_Bot_Token_ထည့်ရန်":
-        tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        tg_app.add_handler(CommandHandler("start", start_command))
-        tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        await tg_app.initialize()
-        await tg_app.start()
-        await tg_app.updater.start_polling()
-        yield
-        await tg_app.updater.stop()
-        await tg_app.stop()
-        await tg_app.shutdown()
-    else:
-        yield
-
-app = FastAPI(lifespan=lifespan)
-
-# Website UI (ဖုန်း App တစ်ခုလို အသုံးပြုနိုင်ရန် Chat Interface)
-@app.get("/", response_class=HTMLResponse)
-def home():
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="my">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AHS AI App</title>
-        <style>
-            body { font-family: sans-serif; background: #0f172a; color: #fff; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
-            header { background: #1e293b; padding: 15px; text-align: center; font-size: 18px; font-weight: bold; border-bottom: 1px solid #334155; }
-            #chat-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
-            .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.5; font-size: 15px; }
-            .user { background: #3b82f6; align-self: flex-end; border-bottom-right-radius: 2px; }
-            .ai { background: #334155; align-self: flex-start; border-bottom-left-radius: 2px; }
-            .input-box { display: flex; padding: 15px; background: #1e293b; border-top: 1px solid #334155; }
-            input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #0f172a; color: #fff; font-size: 16px; outline: none; }
-            button { background: #3b82f6; color: white; border: none; padding: 0 20px; margin-left: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        </style>
-    </head>
-    <body>
-        <header>🤖 AHS AI Assistant</header>
-        <div id="chat-container">
-            <div class="message ai">မင်္ဂလာပါ! ငါက AHS AI ပါ။ ဘာများ ကူညီပေးရမလဲ။</div>
-        </div>
-        <div class="input-box">
-            <input type="text" id="userInput" placeholder="စာရိုက်ပါ..." onkeypress="if(event.key === 'Enter') sendMessage()">
-            <button onclick="sendMessage()">ပို့မည်</button>
-        </div>
-
-        <script>
-            async function sendMessage() {
-                const input = document.getElementById('userInput');
-                const container = document.getElementById('chat-container');
-                const text = input.value.trim();
-                if(!text) return;
-
-                container.innerHTML += `<div class="message user">${text}</div>`;
-                input.value = '';
-                container.scrollTop = container.scrollHeight;
-
-                try {
-                    const res = await fetch('/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_id: 'web_user', message: text })
-                    });
-                    const data = await res.json();
-                    container.innerHTML += `<div class="message ai">${data.reply}</div>`;
-                    container.scrollTop = container.scrollHeight;
-                } catch(err) {
-                    container.innerHTML += `<div class="message ai">Error occurred!</div>`;
-                }
-            }
-        </script>
-    </body>
-    </html>
-    """
-    return html_content
-
-class ChatRequest(BaseModel):
-    user_id: str = "web_user"
-    message: str
-
-# API Endpoint สำหรับ Chat
-@app.post("/chat")
-def chat_api(request: ChatRequest):
-    user_id = request.user_id
-    user_memories[user_id].append({"role": "user", "content": request.message})
-    
-    if len(user_memories[user_id]) > MAX_HISTORY:
-        user_memories[user_id] = user_memories[user_id][-MAX_HISTORY:]
-
-    messages = [{"role": "system", "content": system_prompt}] + user_memories[user_id]
-
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            temperature=0.6,
-            presence_penalty=0.8,
-            frequency_penalty=0.8,
-            max_tokens=1024
-        )
-        reply = response.choices[0].message.content
-        user_memories[user_id].append({"role": "assistant", "content": reply})
-        return {"reply": reply}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-import os
 import base64
 import requests
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from groq import Groq
 
-# AI က သူ့အလိုလို ကုဒ်ရေးပြီး GitHub မှာ တင်မည့် SelfCoder Class
+# FastAPI App တည်ဆောက်ခြင်း
+app = FastAPI()
+
+# Environment Variables တွေ ခေါ်ယူခြင်း
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+# Render က သင့်ရဲ့ App URL (ဥပမာ - https://ahs-ai-api.onrender.com)
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://ahs-ai-api.onrender.com/webhook")
+
+# Groq AI Client သတ်မှတ်ခြင်း
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+# ==========================================
+# 1. AI SELF-CODER SYSTEM (GitHub Integration)
+# ==========================================
 class SelfCoder:
     def __init__(self):
-        self.token = os.environ.get("GITHUB_TOKEN")
-        self.repo = "Aunghtetsan/AHS-AI-API"  # မင်းရဲ့ GitHub Repo 
+        self.token = GITHUB_TOKEN
+        self.repo = "Aunghtetsan/AHS-AI-API"  # မင်းရဲ့ GitHub Repository နာမည်
         self.branch = "main"
 
     def update_code(self, file_path, new_code, commit_message):
@@ -217,3 +62,58 @@ class SelfCoder:
 
 coder = SelfCoder()
 
+# ==========================================
+# 2. FASTAPI WEB ROUTES & TELEGRAM WEBHOOK
+# =================-=========================
+
+@app.get("/")
+def home():
+    return {"status": "AHS AI Agent is running successfully with Self-Coding capability!"}
+
+# Telegram Bot Setup
+telegram_app = Application.builder().token(TELEGRAM_TOKEN).build() if TELEGRAM_TOKEN else None
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("မင်္ဂလာပါ! ငါက မင်းရဲ့ အမိန့်အောက်က အဆင့်မြင့် AI Agent ဖြစ်ပါတယ်။ ဘာကူညီရမလဲ?")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    if not groq_client:
+        await update.message.reply_text("Groq API Key မရှိသေးပါ။")
+        return
+    
+    try:
+        # Groq Llama 3 မော်ဒယ်ဖြင့် အဖြေထုတ်ခြင်း
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are an advanced AI assistant under the user's direct command, capable of programming and self-improvement."},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.7,
+        )
+        reply = completion.choices[0].message.content
+        await update.message.reply_text(reply)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+if telegram_app:
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@app.on_event("startup")
+async def startup_event():
+    if telegram_app:
+        await telegram_app.initialize()
+        await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
+        await telegram_app.start()
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    if not telegram_app:
+        return {"status": "Telegram app not configured"}
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"status": "ok"}
+    
