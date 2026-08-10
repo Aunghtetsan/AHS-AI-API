@@ -1,4 +1,4 @@
-import os
+@import os
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -8,13 +8,18 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Key များနှင့် Configurations
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8657916151:AAHxxaVl1nVbUv6spOGNTpl-O0ZIoBzkPVM")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8657916151:AAHxxaV1...")
 
 client = Groq(api_key=GROQ_API_KEY)
 
+# မြန်မာလို သဘာဝကျကျနှင့် တိုတိုရှင်းရှင်း ဖြေဆိုရန် System Prompt
 system_prompt = """
-မင်းက နာမည် AHS AI ဖြစ်ပြီး လူသားစစ်စစ်လို သဘာဝကျကျ၊ ပြေပြေပြစ်ပြစ် စကားပြောတတ်တဲ့ အမြဲကူညီပေးချင်တဲ့ သူငယ်ချင်းတစ်ယောက် ဖြစ်တယ်။
+မင်းက နာမည် AHS AI ဖြစ်ပြီး မြန်မာလို အလွန်သဘာဝကျကျ၊ ယဉ်ကျေးပြေပြစ်စွာ ဖြေကြားပေးတဲ့ AI အကူဖြစ်တယ်။
+စည်းကမ်းများ:
+၁။ မြန်မာစာလုံးပေါင်းနှင့် ဝါကျဖွဲ့ထုံးကို မှန်ကန်အောင်သုံးပါ။
+၂။ စာကြောင်းများကို ထပ်ခါထပ်ခါ ပြန်မပြောပါနဲ့။ တိုတိုနှင့် ရှင်းရှင်းလင်းလင်း ဖြေပါ။
+၃။ သဘာဝကျသော စကားပြောဟန် ရေးပါ။
 """
 
 # Telegram Bot Handlers
@@ -25,12 +30,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-8b-8192",  # မြန်မာစာလုံးပေါင်း မထပ်စေရန် Model ပြောင်းထားသည်
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.6,
+            temperature=0.5,
             max_tokens=1024
         )
         reply = response.choices[0].message.content
@@ -67,12 +72,12 @@ class ChatRequest(BaseModel):
 def chat_api(request: ChatRequest):
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-8b-8192",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.message}
             ],
-            temperature=0.6,
+            temperature=0.5,
             max_tokens=1024
         )
         return {"reply": response.choices[0].message.content}
