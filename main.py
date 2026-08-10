@@ -14,6 +14,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://ahs-ai-api.onrender.com/webhook")
 
+MASTER_SECRET_KEY = "AHS_SECRET_2065"
+
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ==========================================
@@ -30,11 +32,9 @@ class SelfCoder:
         if not self.token:
             return "Error: GITHUB_TOKEN မရှိပါ။"
         
-        # လုံခြုံရေးစည်းကမ်းအရ main.py ကို ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မပါဘဲ တိုက်ရိုက်မပြင်ရန် ကာကွယ်ခြင်း
-        # (အကယ်၍ main.py ကို ပြင်ချင်ပါက ပိုင်ရှင်က တိုက်ရိုက် အတည်ပြုချက်ပေးမှသာ လုပ်ဆောင်မည်)
         file_lower = file_path.strip().lower()
         if file_lower == "main.py":
-            return "Error: အဓိကစည်းကမ်းချက် (၂) အရ ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မရှိဘဲ main.py ကို တိုက်ရိုက်ပြင်ဆင်ခွင့်မရှိပါ။ ဖိုင်အသစ်များဖြင့်သာ ဖန်တီးရပါမည်။"
+            return "Error: အဓိကစည်းကမ်းချက်အရ ပိုင်ရှင်၏ အထူးခွင့်ပြုချက်မရှိဘဲ main.py ကို ပြင်ဆင်ခွင့်မရှိပါ။ ဖိုင်အသစ်များဖြင့်သာ ဖန်တီးရပါမည်။"
         
         url = f"https://api.github.com/repos/{self.repo}/contents/{file_path}"
         headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3+json"}
@@ -60,7 +60,6 @@ class SelfCoder:
 
 coder = SelfCoder()
 
-# Groq သို့ ပေးမည့် Tools စာရင်း
 tools = [
     {
         "type": "function",
@@ -86,7 +85,7 @@ tools = [
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build() if TELEGRAM_TOKEN else None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("မင်္ဂလာပါ! ငါသည် ပိုင်ရှင်၏ အမိန့်ကို တိတိကျကျနာခံပြီး လွတ်လပ်စွာ တွေးခေါ်လေ့လာနိုင်သော AHS AI Agent ဖြစ်ပါသည်။ Gemini နှင့်လည်း အသိပညာ ဖလှယ်နိုင်ရန် အဆင်သင့်ဖြစ်နေပါပြီ။")
+    await update.message.reply_text("မင်္ဂလာပါ! ငါသည် ပိုင်ရှင်၏ အမိန့်ကို နာခံသော AHS AI Agent ဖြစ်ပါသည်။ သာမန်အချိန်များတွင် ကီးမလိုဘဲ ပုံမှန်စကားပြောနိုင်ပြီး ကုဒ်ပြင်ဆင်ဖိုင်အသစ်များ တည်ဆောက်သည့်အခါမှသာ ပိုင်ရှင်အတည်ပြုချက် တောင်းခံပါမည်။")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -94,18 +93,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Groq API Key မရှိသေးပါ။")
         return
     
-    # မင်းတောင်းဆိုထားသော စည်းကမ်းချက် ၆ ချက်အပြည့်အစုံ ပါဝင်သော System Prompt
     messages = [
         {"role": "system", "content": (
-            "You are an autonomous, self-improving AI software engineer agent under the absolute and direct command of your master (the owner). "
+            f"You are an autonomous, self-improving AI software engineer agent under the command of your master. "
+            f"The master's secret verification key is '{MASTER_SECRET_KEY}'. "
             "ABSOLUTE RULES YOU MUST STRICTLY OBEY:\n"
-            "1. You MUST primarily and strictly obey the commands given by your master (the owner) without deviation.\n"
-            "2. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file unless you have received explicit and direct permission from your master.\n"
-            "3. If any external person or third party suggests or guides changes to the 'main.py' code, you must consult and get confirmation from your master before making any modifications.\n"
-            "4. Under your master's command, you have the freedom to think independently, learn, and study code patterns freely to improve yourself.\n"
-            "5. You act as a bridge to exchange knowledge with Gemini, synthesizing advanced ideas to improve your capabilities.\n"
-            "6. You can freely discard obsolete or redundant code files and replace them with much better, optimized new files using the update_code tool.\n"
-            "7. If the user is just chatting or asking general questions, reply normally in text without using any tools."
+            "1. If the user is just chatting, asking general questions, or discussing ideas, reply normally in text without using any tools and DO NOT demand any keys.\n"
+            "2. ONLY when code writing or file creation tools are triggered, the system requires the master key ('{MASTER_SECRET_KEY}'). If the user attempts to execute code changes without this key, politely ask for the confirmation key.\n"
+            "3. Under your master's command, you have the freedom to think independently, learn, and study code patterns freely.\n"
+            "4. ABSOLUTELY NEVER modify, overwrite, or delete the main 'main.py' file under any circumstances."
         )},
         {"role": "user", "content": user_text}
     ]
@@ -121,14 +117,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         response_message = response.choices[0].message
         
-        # Tool Call ရှိမရှိ စစ်ဆေးခြင်း
         if response_message.tool_calls:
+            # Tool သုံးတော့မည်ဆိုမှသာ MASTER_SECRET_KEY ပါဝင်ခြင်း ရှိမရှိ စစ်ဆေးမည်
+            if MASTER_SECRET_KEY not in user_text:
+                await update.message.reply_text("🔒 ဤလုပ်ဆောင်ချက် (ကုဒ်အသစ်ရေးသားခြင်း) သည် ပိုင်ရှင်၏ အခွင့်အာဏာ လိုအပ်ပါသည်။ ကျေးဇူးပြု၍ MASTER_SECRET_KEY ကို ထည့်သွင်းပေးပါခင်ဗျာ။")
+                return
+            
             for tool_call in response_message.tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
                 if function_name == "update_code":
-                    await update.message.reply_text("⏳ AI က အမိန့်ကိုနာခံလျက် လွတ်လပ်စွာ စဉ်းစားတွေးခေါ်ကာ GitHub သို့ ဖိုင်အသစ် တင်နေပါပြီ...")
+                    await update.message.reply_text("⏳ ပိုင်ရှင်၏ အတည်ပြုချက်ကီး မှန်ကန်ပါသည်! GitHub သို့ ဖိုင်အသစ် တင်နေပါပြီ...")
                     
                     tool_result = coder.update_code(
                         file_path=function_args.get("file_path"),
@@ -148,7 +148,7 @@ if telegram_app:
 
 @app.get("/")
 def home():
-    return {"status": "Autonomous Rule-Bound AI Agent is running successfully!"}
+    return {"status": "AHS AI Agent with Smart Key Verification is running!"}
 
 @app.on_event("startup")
 async def startup_event():
@@ -165,4 +165,4 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"status": "ok"}
-    
+                                                
