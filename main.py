@@ -577,17 +577,13 @@ async def handle_message(
         )
 
     except Exception as e:
-     logger.exception(
+    logger.exception(
         "AI request failed: user_id=%s",
         user_id,
     )
-
-      await update.message.reply_text(
+    await update.message.reply_text(
         f"❌ AI Error:\n{type(e).__name__}: {str(e)[:1500]}"
     )
-    
-
-
 # ============================================================
 # STARTUP
 # ============================================================
