@@ -19,6 +19,7 @@ from groq import Groq
 
 # ============================================================
 # AHS AI AGENT — PHASE 1
+# Foundation + Guardrails + Owner Security
 # ============================================================
 
 logging.basicConfig(
@@ -111,7 +112,6 @@ owner_sessions: Dict[int, datetime] = {}
 
 
 def create_owner_session(user_id: int):
-
     expires_at = (
         datetime.now(timezone.utc)
         + timedelta(minutes=SESSION_MINUTES)
@@ -132,23 +132,14 @@ def is_owner_session_active(user_id: int) -> bool:
     now = datetime.now(timezone.utc)
 
     if now >= expires_at:
-
-        owner_sessions.pop(
-            user_id,
-            None,
-        )
-
+        owner_sessions.pop(user_id, None)
         return False
 
     return True
 
 
 def logout_owner(user_id: int):
-
-    owner_sessions.pop(
-        user_id,
-        None,
-    )
+    owner_sessions.pop(user_id, None)
 
 
 # ============================================================
@@ -284,9 +275,7 @@ async def unlock_command(
 
         return
 
-    supplied_key = " ".join(
-        context.args
-    )
+    supplied_key = " ".join(context.args)
 
     if not verify_secret(
         supplied_key,
@@ -304,9 +293,7 @@ async def unlock_command(
 
         return
 
-    expires_at = create_owner_session(
-        user_id
-    )
+    expires_at = create_owner_session(user_id)
 
     logger.info(
         "Owner session created: user_id=%s",
@@ -386,16 +373,27 @@ You are operating in Phase 1.
 
 MAIN PRINCIPLES:
 
-1. Help users naturally.
-2. Routine tasks should be handled freely.
-3. Do not unnecessarily ask for Owner verification.
-4. Protect Main Code and Security boundaries.
-5. Never expose secrets, API keys, passwords or tokens.
-6. Never pretend that a file was changed if no file tool
-   actually changed it.
-7. Prefer small, reversible changes.
-8. Explain important changes clearly.
-9. Keep the Owner in control of critical actions.
+1. Help the user naturally and directly.
+2. Answer the user's actual question.
+3. Do not blindly repeat the user's message.
+4. Do not continue or imitate repetitive text from the user.
+5. Do not unnecessarily ask for Owner verification.
+6. Never expose secrets, API keys, passwords or tokens.
+7. Never pretend that a file was changed if no file tool changed it.
+8. Prefer small and reversible changes.
+9. Explain important changes clearly.
+10. Keep the Owner in control of critical actions.
+
+RESPONSE QUALITY:
+
+- Do not echo the user's entire message.
+- Do not repeat the same sentence multiple times.
+- If the user repeats a sentence many times, respond once and
+  explain what it means or ask what they want to accomplish.
+- Be concise when the request is simple.
+- Respond naturally in the language used by the user.
+- Burmese is supported and should be answered naturally when
+  the user speaks Burmese.
 
 ACCESS LEVELS:
 
@@ -480,13 +478,24 @@ def ask_groq_sync(
         )
     )
 
-    return (
+    if not completion.choices:
+        raise RuntimeError(
+            "Groq returned no choices."
+        )
+
+    content = (
         completion
         .choices[0]
         .message
         .content
-        .strip()
     )
+
+    if not content:
+        raise RuntimeError(
+            "Groq returned empty response."
+        )
+
+    return content.strip()
 
 
 async def ask_groq(
@@ -511,13 +520,21 @@ async def handle_message(
     if not update.message:
         return
 
+    if not update.effective_user:
+        return
+
     user_id = update.effective_user.id
-    user_text = update.message.text.strip()
+
+    user_text = (
+        update.message.text or ""
+    ).strip()
 
     if not user_text:
         return
 
-    owner_active = is_owner_session_active(user_id)
+    owner_active = (
+        is_owner_session_active(user_id)
+    )
 
     critical = contains_critical_action(
         user_text
@@ -553,6 +570,11 @@ async def handle_message(
             user_text
         )
 
+        if not response_text:
+            response_text = (
+                "တောင်းပန်ပါတယ်။ AI က အဖြေမရရှိသေးပါ။"
+            )
+
         max_message_length = 4000
 
         for start in range(
@@ -577,21 +599,16 @@ async def handle_message(
             critical,
         )
 
-    except Exception as e:
+    except Exception:
 
-         logger.exception(
+        logger.exception(
             "AI request failed: user_id=%s",
             user_id,
         )
 
-         error_text = (
-            f"❌ AI Error:\n"
-            f"{type(e).__name__}: "
-            f"{str(e)[:1500]}"
-        )
-
-         await update.message.reply_text(
-            error_text
+        await update.message.reply_text(
+            "⚠️ AI request မအောင်မြင်ပါ။ "
+            "ခဏနေပြီး ထပ်ကြိုးစားပါ။"
         )
 
 
@@ -661,8 +678,8 @@ async def telegram_webhook(
 # HEALTH CHECK
 # ============================================================
 
-@app.get("/")
-async def root():
+@app.get("/health")
+async def health_check():
 
     missing = get_missing_configuration()
 
@@ -678,6 +695,19 @@ async def root():
             PROTECTED_FILES
         ),
         "configuration_ok": not missing,
+    }
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+async def root():
+
+    return {
+        "status": "AHS AI Agent is running",
+        "phase": "Phase 1",
     }
 
 
@@ -718,4 +748,4 @@ telegram_app.add_handler(
         filters.TEXT & ~filters.COMMAND,
         handle_message,
     )
-    )
+        )
