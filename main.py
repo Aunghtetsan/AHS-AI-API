@@ -9,7 +9,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8657916151:AAHxxaVl1nVbUv6spOGNTpl-O0ZIoBzkPVM")
+
 
 client = Groq(api_key=GROQ_API_KEY)
 
