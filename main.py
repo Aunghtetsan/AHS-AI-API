@@ -1,7 +1,8 @@
 # ============================================================
-# AHS AI — V1
+# AHS AI — V2 FOUNDATION
 # Telegram + Website + Myanmar/English + Memory
-# Self-Improvement Proposal + Main Code Protection
+# Security + Main Code Protection + Improvement Proposals
+# Stock/Paper Trading foundation
 # ============================================================
 
 import os
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -31,15 +33,19 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = os.getenv(
+    "AHS_MODEL",
+    "llama-3.3-70b-versatile",
+)
 
-# Main code is protected.
+APP_VERSION = "AHS V2"
+
 MAIN_FILE = Path("main.py")
 
-# AHS data is kept separately from the main code.
 DATA_DIR = Path("ahs_data")
 MEMORY_FILE = DATA_DIR / "memory.json"
 IMPROVEMENT_FILE = DATA_DIR / "improvements.json"
+PAPER_ACCOUNT_FILE = DATA_DIR / "paper_account.json"
 
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -60,7 +66,10 @@ logger = logging.getLogger("ahs")
 # FASTAPI
 # ============================================================
 
-app = FastAPI(title="AHS AI")
+app = FastAPI(
+    title="AHS AI",
+    version=APP_VERSION,
+)
 
 
 # ============================================================
@@ -76,11 +85,13 @@ if GROQ_API_KEY:
 
 
 # ============================================================
-# MEMORY
+# JSON STORAGE
 # ============================================================
 
 def load_json(path: Path, default):
+
     try:
+
         if not path.exists():
             return default
 
@@ -88,23 +99,28 @@ def load_json(path: Path, default):
             "r",
             encoding="utf-8",
         ) as file:
+
             return json.load(file)
 
     except Exception as error:
+
         logger.error(
-            "Memory load error: %s",
+            "JSON load error: %s",
             error,
         )
+
         return default
 
 
 def save_json(path: Path, data):
+
     temp = path.with_suffix(".tmp")
 
     with temp.open(
         "w",
         encoding="utf-8",
     ) as file:
+
         json.dump(
             data,
             file,
@@ -115,7 +131,12 @@ def save_json(path: Path, data):
     temp.replace(path)
 
 
+# ============================================================
+# MEMORY
+# ============================================================
+
 def get_memory(user_id: int):
+
     memory = load_json(
         MEMORY_FILE,
         {},
@@ -132,17 +153,18 @@ def save_memory(
     role: str,
     content: str,
 ):
+
     memory = load_json(
         MEMORY_FILE,
         {},
     )
 
-    user_key = str(user_id)
+    key = str(user_id)
 
-    if user_key not in memory:
-        memory[user_key] = []
+    if key not in memory:
+        memory[key] = []
 
-    memory[user_key].append(
+    memory[key].append(
         {
             "role": role,
             "content": content,
@@ -152,8 +174,7 @@ def save_memory(
         }
     )
 
-    # Keep memory small and useful.
-    memory[user_key] = memory[user_key][-20:]
+    memory[key] = memory[key][-20:]
 
     save_json(
         MEMORY_FILE,
@@ -170,6 +191,7 @@ def save_improvement_proposal(
     problem: str,
     proposal: str,
 ):
+
     improvements = load_json(
         IMPROVEMENT_FILE,
         [],
@@ -194,32 +216,246 @@ def save_improvement_proposal(
 
 
 # ============================================================
+# SECURITY
+# ============================================================
+
+PROTECTED_FILES = {
+    "main.py",
+    ".env",
+    "credentials.json",
+}
+
+CRITICAL_KEYWORDS = {
+    "delete",
+    "destroy",
+    "deploy",
+    "production",
+    "payment",
+    "withdraw",
+    "transfer",
+    "api key",
+    "token",
+    "password",
+    "secret",
+    "permission",
+    "main.py",
+    "security",
+}
+
+
+def contains_critical_action(text: str) -> bool:
+
+    text_lower = text.lower()
+
+    return any(
+        keyword in text_lower
+        for keyword in CRITICAL_KEYWORDS
+    )
+
+
+def is_protected_file(path: str) -> bool:
+
+    normalized = path.replace(
+        "\\",
+        "/",
+    ).lower()
+
+    if normalized in {
+        item.lower()
+        for item in PROTECTED_FILES
+    }:
+        return True
+
+    if normalized.startswith(".env"):
+        return True
+
+    if "credential" in normalized:
+        return True
+
+    if "secret" in normalized:
+        return True
+
+    return False
+
+
+# ============================================================
+# PAPER TRADING
+# ============================================================
+
+DEFAULT_PAPER_ACCOUNT = {
+    "cash": 100000.0,
+    "positions": {},
+    "orders": [],
+}
+
+
+def get_paper_account():
+
+    return load_json(
+        PAPER_ACCOUNT_FILE,
+        DEFAULT_PAPER_ACCOUNT.copy(),
+    )
+
+
+def save_paper_account(account):
+
+    save_json(
+        PAPER_ACCOUNT_FILE,
+        account,
+    )
+
+
+def paper_buy(
+    symbol: str,
+    quantity: int,
+    price: float,
+):
+
+    if quantity <= 0 or price <= 0:
+        raise ValueError(
+            "Quantity and price must be positive."
+        )
+
+    account = get_paper_account()
+
+    cost = quantity * price
+
+    if account["cash"] < cost:
+        raise ValueError(
+            "Insufficient paper-trading cash."
+        )
+
+    account["cash"] -= cost
+
+    positions = account.setdefault(
+        "positions",
+        {},
+    )
+
+    position = positions.setdefault(
+        symbol.upper(),
+        {
+            "quantity": 0,
+            "average_price": 0,
+        },
+    )
+
+    old_quantity = position["quantity"]
+
+    new_quantity = (
+        old_quantity + quantity
+    )
+
+    if new_quantity > 0:
+
+        position["average_price"] = (
+            (
+                old_quantity
+                * position["average_price"]
+            )
+            + cost
+        ) / new_quantity
+
+    position["quantity"] = new_quantity
+
+    account["orders"].append(
+        {
+            "side": "BUY",
+            "symbol": symbol.upper(),
+            "quantity": quantity,
+            "price": price,
+            "time": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+    )
+
+    save_paper_account(account)
+
+    return account
+
+
+def paper_sell(
+    symbol: str,
+    quantity: int,
+    price: float,
+):
+
+    if quantity <= 0 or price <= 0:
+        raise ValueError(
+            "Quantity and price must be positive."
+        )
+
+    account = get_paper_account()
+
+    symbol = symbol.upper()
+
+    positions = account.setdefault(
+        "positions",
+        {},
+    )
+
+    position = positions.get(symbol)
+
+    if not position:
+        raise ValueError(
+            "No paper position exists."
+        )
+
+    if position["quantity"] < quantity:
+        raise ValueError(
+            "Not enough paper shares."
+        )
+
+    account["cash"] += (
+        quantity * price
+    )
+
+    position["quantity"] -= quantity
+
+    if position["quantity"] == 0:
+        del positions[symbol]
+
+    account["orders"].append(
+        {
+            "side": "SELL",
+            "symbol": symbol,
+            "quantity": quantity,
+            "price": price,
+            "time": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+    )
+
+    save_paper_account(account)
+
+    return account
+
+
+# ============================================================
 # SYSTEM PROMPT
 # ============================================================
 
 SYSTEM_PROMPT = """
-You are AHS AI.
+You are AHS AI V2.
 
-You are a helpful AI assistant designed for the Owner.
+You are a Burmese/English AI assistant.
 
 LANGUAGE:
 
-1. Understand Burmese naturally.
-2. Speak Burmese naturally and clearly.
-3. Understand English.
-4. Translate English to Burmese accurately.
-5. Translate Burmese to English accurately.
-6. If the user mixes Burmese and English, understand both.
+- Understand Burmese naturally.
+- Speak Burmese clearly and naturally.
+- Understand English.
+- Translate Burmese <-> English.
+- Understand mixed Burmese and English.
 
-GENERAL BEHAVIOR:
+GENERAL:
 
-1. Follow the user's legitimate instructions.
-2. Answer directly.
-3. Do not unnecessarily repeat the user's message.
-4. Do not generate repetitive answers.
-5. Be honest about what you can and cannot do.
-6. Never claim that you changed a file unless a real file
-   operation actually happened.
+- Answer directly and accurately.
+- Do not pretend to perform actions that were not performed.
+- Never claim a file was changed unless a real file operation happened.
+- Explain uncertainty when information is unavailable.
 
 CODING:
 
@@ -227,68 +463,60 @@ You can:
 - Write code.
 - Explain code.
 - Debug code.
-- Improve code.
-- Design software architecture.
-- Suggest safer implementations.
+- Review code.
+- Design software.
+- Suggest improvements.
+- Analyze errors.
 
-MAIN CODE PROTECTION:
+SECURITY:
 
 The Main Code is protected.
 
-Never:
-- Delete main.py automatically.
-- Replace main.py automatically.
-- Rewrite unrelated existing code.
-- Modify unrelated files.
-- Remove working code without a clear reason.
-- Claim that a protected file was changed when it was not.
+Never automatically:
+- Delete main.py.
+- Replace main.py.
+- Expose API keys.
+- Expose passwords.
+- Expose tokens.
+- Expose secrets.
+- Modify protected files.
 
-If a Main Code change is necessary:
-
-1. Identify the exact required change.
-2. Explain why it is necessary.
-3. Create a proposed change.
-4. Preserve the existing code.
-5. Test the proposed change separately when possible.
-6. Ask the Owner for approval.
-7. Only after explicit Owner approval may the change
-   be applied.
+Critical changes require Owner approval.
 
 SELF-IMPROVEMENT:
 
-You should continuously look for ways to improve:
+You may:
+- Analyze problems.
+- Suggest improvements.
+- Create improvement proposals.
+- Design safer code.
+- Test ideas in safe environments.
 
-- Response quality.
-- Burmese language quality.
-- Translation quality.
-- Code quality.
-- Error handling.
-- Performance.
-- Memory organization.
-- Reliability.
+You must NOT automatically modify protected Main Code.
 
-However:
+STOCKS:
 
-Self-improvement does NOT give you permission to modify
-the Main Code automatically.
+You can explain:
+- Stocks.
+- Companies.
+- Market concepts.
+- Risk management.
+- Technical-analysis concepts.
+- Fundamental-analysis concepts.
+- Paper trading.
 
-You may create improvement proposals.
+Do not pretend to have live market data unless a real
+market-data source has been connected.
 
-You may analyze problems.
+Real-money trading must require explicit Owner confirmation.
 
-You may create new code proposals.
+PAPER TRADING:
 
-You may test ideas in a safe environment.
+Paper trading uses simulated money only.
 
-But Main Code changes require Owner approval.
+Never describe paper trades as real trades.
 
-SAFETY:
-
-Never expose API keys, passwords, tokens or private secrets.
-
-Never pretend to have permissions that you do not have.
-
-The Owner remains in control of protected changes.
+The Owner remains in control of protected actions.
 """
 
 
@@ -302,6 +530,7 @@ def ask_groq_sync(
 ) -> str:
 
     if not groq_client:
+
         raise RuntimeError(
             "GROQ_API_KEY is missing."
         )
@@ -313,8 +542,8 @@ def ask_groq_sync(
         }
     ]
 
-    # Add recent memory.
     for item in memory[-10:]:
+
         messages.append(
             {
                 "role": item["role"],
@@ -342,6 +571,7 @@ def ask_groq_sync(
     )
 
     if not completion.choices:
+
         raise RuntimeError(
             "AI returned no response."
         )
@@ -354,6 +584,7 @@ def ask_groq_sync(
     )
 
     if not response:
+
         raise RuntimeError(
             "AI returned an empty response."
         )
@@ -387,12 +618,14 @@ async def start_command(
 
     await update.message.reply_text(
         "မင်္ဂလာပါ 👋\n\n"
-        "ကျွန်တော် AHS AI ပါ။\n"
-        "မြန်မာ/English စကားပြောနိုင်ပါတယ်။\n"
-        "ဘာသာပြန်၊ coding၊ debugging နဲ့ "
-        "အထွေထွေ AI အကူအညီတွေ ပေးနိုင်ပါတယ်။\n\n"
-        "Main Code ကိုတော့ ပိုင်ရှင်ခွင့်ပြုချက်မရှိဘဲ "
-        "မပြင်ဆင်ပါ။"
+        "ကျွန်တော် AHS AI V2 ပါ။\n"
+        "မြန်မာ / English နားလည်ပါတယ်။\n"
+        "Coding၊ ဘာသာပြန်၊ AI အကူအညီနဲ့ "
+        "Stock/Paper Trading အကြောင်းတွေ "
+        "ကူညီပေးနိုင်ပါတယ်။\n\n"
+        "Main Code နဲ့ ငွေအစစ်ဆိုင်ရာ "
+        "လုပ်ဆောင်ချက်တွေကို Owner ခွင့်ပြုချက်မရှိဘဲ "
+        "မလုပ်ပါ။"
     )
 
 
@@ -443,7 +676,6 @@ async def handle_message(
             response,
         )
 
-        # Telegram message limit protection.
         max_length = 4000
 
         for start in range(
@@ -457,11 +689,6 @@ async def handle_message(
                     start:start + max_length
                 ]
             )
-
-        logger.info(
-            "Telegram request completed: %s",
-            user_id,
-        )
 
     except Exception as error:
 
@@ -515,11 +742,13 @@ if TELEGRAM_TOKEN:
 async def startup():
 
     if not GROQ_API_KEY:
+
         logger.warning(
             "GROQ_API_KEY is not configured."
         )
 
     if not TELEGRAM_TOKEN:
+
         logger.warning(
             "TELEGRAM_TOKEN is not configured."
         )
@@ -535,7 +764,7 @@ async def startup():
         )
 
     logger.info(
-        "AHS AI started."
+        "AHS AI V2 started."
     )
 
 
@@ -552,10 +781,6 @@ async def shutdown():
 
         await telegram_app.shutdown()
 
-        logger.info(
-            "Telegram application stopped."
-        )
-
 
 # ============================================================
 # TELEGRAM WEBHOOK
@@ -567,24 +792,46 @@ async def telegram_webhook(
 ):
 
     if not telegram_app:
+
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status":
+                "telegram_not_configured"
+            },
+        )
+
+    try:
+
+        data = await request.json()
+
+        update = Update.de_json(
+            data,
+            telegram_app.bot,
+        )
+
+        await telegram_app.process_update(
+            update
+        )
+
         return {
-            "status": "telegram_not_configured"
+            "status": "ok"
         }
 
-    data = await request.json()
+    except Exception as error:
 
-    update = Update.de_json(
-        data,
-        telegram_app.bot,
-    )
+        logger.exception(
+            "Webhook error: %s",
+            error,
+        )
 
-    await telegram_app.process_update(
-        update
-    )
-
-    return {
-        "status": "ok"
-    }
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Webhook failed",
+            },
+        )
 
 
 # ============================================================
@@ -596,7 +843,19 @@ async def website_chat(
     request: Request,
 ):
 
-    data = await request.json()
+    try:
+
+        data = await request.json()
+
+    except Exception:
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Invalid JSON",
+            },
+        )
 
     user_text = str(
         data.get(
@@ -606,11 +865,16 @@ async def website_chat(
     ).strip()
 
     if not user_text:
-        return {
-            "error": "message is required"
-        }
 
-    # Website uses user_id 0 for basic V1 memory.
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message":
+                    "message is required",
+            },
+        )
+
     user_id = 0
 
     try:
@@ -639,6 +903,7 @@ async def website_chat(
         return {
             "status": "ok",
             "response": response,
+            "version": APP_VERSION,
         }
 
     except Exception as error:
@@ -648,10 +913,143 @@ async def website_chat(
             error,
         )
 
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "AI request failed",
+            },
+        )
+
+
+# ============================================================
+# PAPER TRADING API
+# ============================================================
+
+@app.get("/api/paper/account")
+async def paper_account():
+
+    return {
+        "status": "ok",
+        "mode": "paper",
+        "account": get_paper_account(),
+    }
+
+
+@app.post("/api/paper/buy")
+async def paper_buy_api(
+    request: Request,
+):
+
+    try:
+
+        data = await request.json()
+
+        symbol = str(
+            data.get(
+                "symbol",
+                "",
+            )
+        ).strip()
+
+        quantity = int(
+            data.get(
+                "quantity",
+                0,
+            )
+        )
+
+        price = float(
+            data.get(
+                "price",
+                0,
+            )
+        )
+
+        account = paper_buy(
+            symbol,
+            quantity,
+            price,
+        )
+
         return {
-            "status": "error",
-            "message": "AI request failed",
+            "status": "ok",
+            "mode": "paper",
+            "account": account,
         }
+
+    except Exception as error:
+
+        logger.exception(
+            "Paper buy error: %s",
+            error,
+        )
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": str(error),
+            },
+        )
+
+
+@app.post("/api/paper/sell")
+async def paper_sell_api(
+    request: Request,
+):
+
+    try:
+
+        data = await request.json()
+
+        symbol = str(
+            data.get(
+                "symbol",
+                "",
+            )
+        ).strip()
+
+        quantity = int(
+            data.get(
+                "quantity",
+                0,
+            )
+        )
+
+        price = float(
+            data.get(
+                "price",
+                0,
+            )
+        )
+
+        account = paper_sell(
+            symbol,
+            quantity,
+            price,
+        )
+
+        return {
+            "status": "ok",
+            "mode": "paper",
+            "account": account,
+        }
+
+    except Exception as error:
+
+        logger.exception(
+            "Paper sell error: %s",
+            error,
+        )
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": str(error),
+            },
+        )
 
 
 # ============================================================
@@ -663,12 +1061,15 @@ async def health():
 
     return {
         "status": "running",
+        "version": APP_VERSION,
         "ai": bool(GROQ_API_KEY),
         "telegram": bool(TELEGRAM_TOKEN),
-        "main_code_protected": True,
         "memory": True,
         "self_improvement": True,
-        "version": "AHS V1",
+        "main_code_protected": True,
+        "stock_analysis": True,
+        "paper_trading": True,
+        "real_trading": False,
     }
 
 
@@ -682,5 +1083,16 @@ async def home():
     return {
         "name": "AHS AI",
         "status": "running",
-        "version": "V1",
-            }
+        "version": APP_VERSION,
+        "features": [
+            "Burmese",
+            "English",
+            "Translation",
+            "Coding",
+            "Memory",
+            "Security",
+            "Self-improvement proposals",
+            "Stock foundation",
+            "Paper trading",
+        ],
+    } 
