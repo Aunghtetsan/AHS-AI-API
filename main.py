@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 from telegram import Update
 from telegram.ext import (
@@ -130,7 +131,18 @@ def save_json(path: Path, data):
 
     temp.replace(path)
 
+# ============================================================
+# API SCHEMAS
+# ============================================================
 
+class ChatRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    status: str
+    response: str
+    version: str
 # ============================================================
 # MEMORY
 # ============================================================
@@ -838,31 +850,15 @@ async def telegram_webhook(
 # WEBSITE / API
 # ============================================================
 
-@app.post("/api/chat")
+@app.post(
+    "/api/chat",
+    response_model=ChatResponse,
+)
 async def website_chat(
-    request: Request,
+    request: ChatRequest,
 ):
 
-    try:
-
-        data = await request.json()
-
-    except Exception:
-
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": "Invalid JSON",
-            },
-        )
-
-    user_text = str(
-        data.get(
-            "message",
-            "",
-        )
-    ).strip()
+    user_text = request.message.strip()
 
     if not user_text:
 
@@ -870,8 +866,7 @@ async def website_chat(
             status_code=400,
             content={
                 "status": "error",
-                "message":
-                    "message is required",
+                "message": "message is required",
             },
         )
 
