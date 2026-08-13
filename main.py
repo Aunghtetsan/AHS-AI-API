@@ -771,13 +771,18 @@ async def startup():
 
         await telegram_app.start()
 
-        logger.info(
-            "Telegram application started."
+        webhook_url = (
+            "https://ahs-ai-api.onrender.com/webhook"
         )
 
-    logger.info(
-        "AHS AI V2 started."
-    )
+        await telegram_app.bot.set_webhook(
+            url=webhook_url
+        )
+
+        logger.info(
+            "Telegram webhook set: %s",
+            webhook_url,
+        )
 
 
 # ============================================================
